@@ -1,0 +1,49 @@
+cabal-version:        3.0
+name:                 cycleq
+version:              0.1.0.0
+synopsis:             A cyclic equational theorem prover
+license:              MIT
+license-file:         LICENSE
+author:               Eddie Jones
+maintainer:           eddie.c.jones@outlook.com
+category:             Math
+
+library
+  exposed-modules:    Cycleq
+
+  other-modules:      Syntax, Normalisation
+
+  hs-source-dirs:     src
+
+  build-depends:      base, ghc, mtl
+
+  ghc-options:        -Wall
+                      -Wcompat
+                      -Widentities
+                      -Wincomplete-uni-patterns
+                      -Wincomplete-record-updates
+                      -Wredundant-constraints
+                      -Wmissing-export-lists
+                      -Wpartial-fields
+                      -Wmissing-deriving-strategies
+                      -Wunused-packages
+
+                      -Wno-unused-matches
+
+  default-language:   Haskell2010
+
+test-suite test
+  type:               exitcode-stdio-1.0   
+
+  main-is:            Test.hs
+
+  hs-source-dirs:     test
+
+  build-depends:      base, cycleq
+
+  ghc-options:        -fplugin Cycleq
+                      -fno-enable-rewrite-rules
+
+  default-extensions: NoImplicitPrelude
+
+  default-language:   Haskell98
