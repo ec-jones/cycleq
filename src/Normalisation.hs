@@ -1,14 +1,23 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Normalisation
-  ( Context (..),
+  ( -- * Reduction Context
+    Context (..),
     progContext,
     addBind,
     addFreeVars,
-    normalise,
+
+    -- * Reduction
+    normaliseTerm,
     criticalTerms,
-    isProductive,
+
+    -- * Equation Simplification
+    SimplifyRes (..),
+    simplifyEquation,
+    simplifySequent,
   )
 where
 
@@ -18,7 +27,9 @@ import Data.Bifunctor
 import qualified Data.List as List
 import GHC.Data.Maybe
 import GHC.Plugins hiding (empty)
-import Syntax hiding (criticalTerms, isProductive, normalise)
+import Syntax hiding (criticalTerms, normaliseTerm, simplifyEquation, simplifySequent)
+
+-- * Reduction Context
 
 -- | A normalisation context is a collection of partially bound variables.
 data Context = Context
@@ -51,10 +62,12 @@ addFreeVars fvs ctx =
     { inScopeSet = extendInScopeSetList (inScopeSet ctx) fvs
     }
 
+-- * Reduction
+
 -- | Normalise a core expression under a set of unconditional equations.
 -- Equations are applied eagerly and so should be confluent.
-normalise :: forall m. (MonadReader Context m) => [Equation] -> CoreExpr -> m CoreExpr
-normalise equations expr = fromMaybe expr <$> runMaybeT (go expr [])
+normaliseTerm :: forall m. (MonadReader Context m) => [Equation] -> CoreExpr -> m CoreExpr
+normaliseTerm equations expr = fromMaybe expr <$> runMaybeT (go expr [])
   where
     go :: CoreExpr -> [CoreArg] -> MaybeT m CoreExpr
     go (Var x) args
@@ -132,8 +145,8 @@ criticalTerms equations expr = go expr []
     go (Let bind body) args =
       fmap (Let bind) <$> local (addBind bind) (go body args)
     go (Case scrut x ty alts) args = do
-      scrut' <- normalise equations scrut
-      -- Transitivity
+      scrut' <- normaliseTerm equations scrut
+      -- Transitivity of critical terms
       scruts <- go scrut' []
       case collectArgs scrut' of
         (Var scrutHead, scrutArgs)
@@ -148,6 +161,61 @@ criticalTerms equations expr = go expr []
     go _ _ =
       pprPanic "core expression must be stripped of ticks, casts, types, and coercions!" (text "")
 
--- | Check whether a core expression can be reduce to a constructor through case analysis of unproductive terms.
-isProductive :: [Equation] -> CoreExpr -> m Bool
-isProductive equations = undefined
+-- * Equation Simplification
+
+-- | The result of simplifying an equation.
+data SimplifyRes a
+  = Unsat
+  | Trivial
+  | Cong [a]
+  | Reduce a
+  deriving stock Functor
+
+instance Outputable a => Outputable (SimplifyRes a) where
+  ppr Unsat = text "Unsat"
+  ppr Trivial = text "Trivial"
+  ppr (Cong eqs) = text "Cong:" <+> ppr eqs
+  ppr (Reduce eq) = text "Reduce:" <+> ppr eq
+
+-- | One-step simplification of an equation.
+simplifyEquation :: (MonadReader Context m) => [Equation] -> Equation -> m (SimplifyRes Equation)
+simplifyEquation equations (Equation lhs rhs) = do
+  lhs' <- normaliseTerm equations lhs
+  rhs' <- normaliseTerm equations rhs
+  scope <- asks inScopeSet
+  pure (mkSimplifyResult scope lhs' rhs')
+  where
+    mkSimplifyResult scope lhs' rhs'
+      | eqExpr scope lhs' rhs' = Trivial
+      | (Var lcon, lconArgs) <- collectArgs lhs',
+        (Var rcon, rconArgs) <- collectArgs rhs',
+        isDataConWorkId lcon,
+        isDataConWorkId rcon =
+        if lcon == rcon
+          then Cong (zipWith Equation lconArgs rconArgs)
+          else Unsat
+      | otherwise = Reduce (Equation lhs' rhs')
+
+-- | Repeatedly simplify a sequents antecedent and consequent. 
+simplifySequent :: MonadReader Context m => Sequent Equation -> m (SimplifyRes (Sequent Equation))
+simplifySequent sequent = local (addFreeVars (univVars sequent)) $ go [] (antecedent sequent)
+  where
+    -- Simplify consequent under simplified antecedent.
+    go acc [] = do
+      consequent' <- simplifyEquation acc (consequent sequent)
+      fmap
+        ( \consequent' ->
+            sequent
+              { antecedent = acc,
+                consequent = consequent'
+              }
+        )
+        <$> simplifyEquation acc (consequent sequent)
+    -- Simplify antecedent by focusing on each equation in turn.
+    go acc (eq : eqs) = do
+      res <- simplifyEquation (acc ++ eqs) eq
+      case res of
+        Unsat -> pure Trivial
+        Trivial -> go acc eqs
+        Cong eqs' -> go [] (eqs' ++ acc ++ eqs)
+        Reduce eq -> go (eq : acc) eqs

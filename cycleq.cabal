@@ -9,9 +9,9 @@ maintainer:           eddie.c.jones@outlook.com
 category:             Math
 
 library
-  exposed-modules:    Cycleq
+  exposed-modules:    Unconditional
 
-  other-modules:      Syntax, Normalisation
+  -- other-modules:      Syntax, Normalisation
 
   hs-source-dirs:     src
 

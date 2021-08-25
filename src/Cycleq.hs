@@ -6,15 +6,17 @@ module Cycleq
 
     -- * Equations and Sequents
     Equation,
-    Sequent,
     (≃),
+    Sequent,
+    Syntax.IsSequent,
     (⊢),
 
     -- * Commands
     Command,
-    Syntax.normalise,
+    Syntax.normaliseTerm,
     Syntax.criticalTerms,
-    Syntax.isProductive,
+    Syntax.simplifyEquation,
+    Syntax.simplifySequent
   )
 where
 
@@ -46,15 +48,19 @@ plugin =
 
 -- | Evalate a command
 handleCommand :: ModGuts -> Command -> CoreM ()
-handleCommand mguts (Normalise (Sequent fvs ante expr)) =
+handleCommand mguts (NormaliseTerm (Sequent fvs ante expr)) =
   let ctx = addFreeVars fvs $ progContext (mg_binds mguts)
-      res = runReader (Normalisation.normalise ante expr) ctx
+      res = runReader (Normalisation.normaliseTerm ante expr) ctx
    in putMsg (ppr res)
 handleCommand mguts (CriticalTerms (Sequent fvs ante expr)) =
   let ctx = addFreeVars fvs $ progContext (mg_binds mguts)
       res = runReader (Normalisation.criticalTerms ante expr) ctx
    in putMsg (ppr res)
-handleCommand mguts (IsProductive (Sequent fvs ante expr)) =
+handleCommand mguts (SimplifyEquation (Sequent fvs ante expr)) =
   let ctx = addFreeVars fvs $ progContext (mg_binds mguts)
-      res = runReader (Normalisation.isProductive ante expr) ctx
+      res = runReader (Normalisation.simplifyEquation ante expr) ctx
+   in putMsg (ppr res)
+handleCommand mguts (SimplifySequent sequent) =
+  let ctx = progContext (mg_binds mguts)
+      res = runReader (Normalisation.simplifySequent sequent) ctx
    in putMsg (ppr res)

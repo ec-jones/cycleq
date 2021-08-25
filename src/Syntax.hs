@@ -1,4 +1,9 @@
+{-# LANGUAGE AllowAmbiguousTypes #-}
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE TypeOperators #-}
 
 module Syntax
   ( Syntax (..),
@@ -7,18 +12,22 @@ module Syntax
     Equation (..),
     (≃),
     Sequent (..),
+    IsSequent,
     (⊢),
 
     -- * Commands
     Command (..),
-    normalise,
+    normaliseTerm,
     criticalTerms,
-    isProductive,
+    simplifyEquation,
+    simplifySequent,
   )
 where
 
 import Data.Bifunctor
+import Data.Kind
 import GHC.Plugins
+import GHC.TypeLits
 
 -- | The class of cycleq syntax that can be decoded from core expressions.
 class Syntax a where
@@ -63,6 +72,8 @@ instance Syntax CoreExpr where
 data Equation
   = Equation CoreExpr CoreExpr
 
+infix 4 ≃
+
 (≃) :: a -> a -> Equation
 {-# NOINLINE (≃) #-}
 (≃) = undefined
@@ -85,15 +96,28 @@ data Sequent a = Sequent
     consequent :: a
   }
 
+-- | Top-level lambdas are interpreted as universal quantifiers.
+-- That is, the variable @x@ is treated as free when normalising @expr@ with the command @normaliseTerm (\ x -> expr)@.
+-- @IsSequent a b@ specifies that @a@ is a function type that ultimately returns @Sequent b@.
+type family IsSequent a b :: Constraint where
+  IsSequent a (Sequent b) = (a ~ b)
+  IsSequent a (b -> c) = IsSequent a c
+  IsSequent a b =
+    TypeError
+      ( 'Text "The type "
+          ':<>: 'ShowType a
+          ':<>: 'Text " is not ultimately a sequent!"
+      )
+
+infix 3 ⊢
+
 (⊢) :: [Equation] -> a -> Sequent a
 {-# NOINLINE (⊢) #-}
 (⊢) = undefined
 
 instance Outputable a => Outputable (Sequent a) where
-  ppr = error "unimplemented!"
+  ppr sequent = interpp'SP (antecedent sequent) <+> text "⊢" <+> ppr (consequent sequent)
 
--- | N.B. Top-level lambdas are interpreted as universal quantifiers.
--- That is, the variable @x@ is treated as free when normalising @expr@ with the command @normalise (\ x -> expr)@.
 instance Syntax a => Syntax (Sequent a) where
   decodeCore srcExpr =
     let (xs, body) = collectBinders srcExpr
@@ -107,36 +131,45 @@ instance Syntax a => Syntax (Sequent a) where
 
 -- | A command for the Cycleq system to execute.
 data Command
-  = Normalise (Sequent CoreExpr)
+  = NormaliseTerm (Sequent CoreExpr)
   | CriticalTerms (Sequent CoreExpr)
-  | IsProductive (Sequent CoreExpr)
+  | SimplifyEquation (Sequent Equation)
+  | SimplifySequent (Sequent Equation)
 
 -- | Normalise a core expression under a set of unconditional equations.
 -- Equations are applied eagerly and so should be confluent.
-normalise :: a -> Command
-{-# NOINLINE normalise #-}
-normalise = undefined
+normaliseTerm :: IsSequent b a => a -> Command
+{-# NOINLINE normaliseTerm #-}
+normaliseTerm = undefined
 
 -- | Recursively analyse which expressions are preventing reduction to a constructor.
-criticalTerms :: a -> Command
+criticalTerms :: IsSequent b a => a -> Command
 {-# NOINLINE criticalTerms #-}
-criticalTerms = undefined 
+criticalTerms = undefined
 
--- | Check whether a core expression can be reduce to a constructor finite case analysis.
-isProductive :: a -> Command
-{-# NOINLINE isProductive #-}
-isProductive = undefined 
+-- | Simplify an equation by normalisation, congruence, and reflexivity.
+simplifyEquation :: IsSequent Equation a => a -> Command
+{-# NOINLINE simplifyEquation #-}
+simplifyEquation = undefined
+
+-- | Simplify a sequent by simplifying the equations it conerns.
+simplifySequent :: IsSequent Equation a => a -> Command
+{-# NOINLINE simplifySequent #-}
+simplifySequent = undefined
 
 instance Syntax Command where
   decodeCore srcExpr =
     case collectArgs srcExpr of
-      (Var commandType, [_, sequent])
-        | occName commandType == mkVarOcc "normalise" ->
-          Normalise (decodeCore sequent)
-      (Var commandType, [_, sequent])
+      (Var commandType, [_, _, _, sequent])
+        | occName commandType == mkVarOcc "normaliseTerm" ->
+          NormaliseTerm (decodeCore sequent)
+      (Var commandType, [_, _, _, sequent])
         | occName commandType == mkVarOcc "criticalTerms" ->
           CriticalTerms (decodeCore sequent)
-      (Var commandType, [_, sequent])
-        | occName commandType == mkVarOcc "isProductive" ->
-          CriticalTerms (decodeCore sequent)
+      (Var commandType, [_, _, sequent])
+        | occName commandType == mkVarOcc "simplifyEquation" ->
+          SimplifyEquation (decodeCore sequent)
+      (Var commandType, [_, _, sequent])
+        | occName commandType == mkVarOcc "simplifySequent" ->
+          SimplifySequent (decodeCore sequent)
       _ -> pprPanic "Couldn't interpret expression as command!" (ppr srcExpr)
