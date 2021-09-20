@@ -9,13 +9,23 @@ maintainer:           eddie.c.jones@outlook.com
 category:             Math
 
 library
-  exposed-modules:    Unconditional
+  exposed-modules:    Cycleq
 
-  -- other-modules:      Syntax, Normalisation
+  other-modules:      Cycleq.Equation,
+                      Cycleq.Reduction,
+                      Cycleq.Edge,
+                      Cycleq.Proof,
+                      Cycleq.Prover
 
   hs-source-dirs:     src
 
-  build-depends:      base, ghc, mtl
+  build-depends:      base,
+                      containers,
+                      text,
+                      process,
+                      freer-simple,
+                      ghc,
+                      graphviz
 
   ghc-options:        -Wall
                       -Wcompat
@@ -42,7 +52,7 @@ test-suite test
   build-depends:      base, cycleq
 
   ghc-options:        -fplugin Cycleq
-                      -fno-enable-rewrite-rules
+                      -- -fno-enable-rewrite-rules
 
   default-extensions: NoImplicitPrelude
 
