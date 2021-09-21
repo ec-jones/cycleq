@@ -11,7 +11,7 @@ import GHC.Plugins hiding ((<>))
 
 -- * Proof Edges
 
--- | A collection of size-change graphs between the same nodes.
+-- | An upwards-closed collection of size-change graphs between the same nodes.
 data Edge = Edge
   { edgeSCGs :: [SCG],
     edgeLabel :: Maybe SDoc
@@ -20,12 +20,18 @@ data Edge = Edge
 instance Semigroup Edge where
   edge1 <> edge2 =
     Edge
-      { edgeSCGs = liftA2 (<>) (edgeSCGs edge1) (edgeSCGs edge2),
+      { edgeSCGs =
+          Foldable.foldl'
+            ( \acc scg1 ->
+                Foldable.foldl' (\acc' scg2 -> insert acc' (scg1 <> scg2)) acc (edgeSCGs edge2)
+            )
+            []
+            (edgeSCGs edge1),
         edgeLabel = Nothing
       }
 
 instance Outputable Edge where
-  ppr Edge {edgeLabel} = ppr edgeLabel
+  ppr Edge {edgeSCGs} = ppr edgeSCGs
 
 -- | An identity edge where shared variables haven't changed.
 identityEdge :: Equation -> Equation -> Edge
@@ -38,8 +44,8 @@ identityEdge equation1 equation2 =
         ]
    in Edge [mkSCG n m entries] (Just (text ""))
   where
-    n = length (equationVars equation1)
-    m = length (equationVars equation2)
+    n = length (equationVars equation1) - 1
+    m = length (equationVars equation2) - 1
 
 -- | An edge that results from narrowing a variable to a constructor.
 caseEdge :: Var -> [Var] -> Equation -> Equation -> Edge
@@ -52,8 +58,8 @@ caseEdge x ys equation1 equation2 =
       label = pprWithCommas (\y -> ppr y <+> text "<" <+> ppr x) ys
    in Edge [mkSCG n m entries] (Just label)
   where
-    n = length (equationVars equation1)
-    m = length (equationVars equation2)
+    n = length (equationVars equation1) - 1
+    m = length (equationVars equation2) - 1
 
     mkDecrease z y
       | z == x && elem y ys = Decrease
@@ -78,8 +84,8 @@ substEdge (Subst _ subst _ _) equation1 equation2 =
         ]
    in Edge [mkSCG n m entries] (Just (interpp'SP labels))
   where
-    n = length (equationVars equation1)
-    m = length (equationVars equation2)
+    n = length (equationVars equation1) - 1
+    m = length (equationVars equation2) - 1
 
     mkDecrease z y =
       case lookupVarEnv subst y of
@@ -100,14 +106,14 @@ unionEdges edge1 edge2 =
 insert :: [SCG] -> SCG -> [SCG]
 insert [] graph = [graph]
 insert (graph : graphs) graph'
-  | graph `isStrongerSCGThan` graph' = insert graphs graph'
-  | graph' `isStrongerSCGThan` graph = graph : graphs
+  | graph `isAsStrongAsSCG` graph' = insert graphs graph'
+  | graph' `isAsStrongAsSCG` graph = graph : graphs
   | otherwise = graph : insert graphs graph'
 
 -- | Check that every size-change graph in the first edge is subsumed by a size-change graph in the second.
-isStrongerEdgeThan :: Edge -> Edge -> Bool
-isStrongerEdgeThan edge1 edge2 =
-  all (\scg2 -> any (`isStrongerSCGThan` scg2) (edgeSCGs edge1)) (edgeSCGs edge2)
+isAsStrongAsEdge :: Edge -> Edge -> Bool
+isAsStrongAsEdge edge1 edge2 =
+  all (\scg1 -> any (isAsStrongAsSCG scg1) (edgeSCGs edge2)) (edgeSCGs edge1)
 
 -- | Check that an edge is well-founded.
 isWellFounded :: Edge -> Bool
@@ -118,6 +124,9 @@ isWellFounded = all isSCGWellFounded . edgeSCGs
 -- | An individual size-change graph.
 newtype SCG = SCG (Array.Array (Int, Int) Decrease)
 
+instance Outputable SCG where
+  ppr (SCG arr) = ppr (Array.assocs arr)
+
 instance Semigroup SCG where
   SCG graph1 <> SCG graph2
     | n == n' =
@@ -125,7 +134,8 @@ instance Semigroup SCG where
         Array.array
           ((0, 0), (m, p))
           [ ( (i, j),
-              maximum [graph1 Array.! (i, k) <> graph2 Array.! (k, j) | k <- Array.range (0, n)]
+              let pairs = [graph1 Array.! (i, k) <> graph2 Array.! (k, j) | k <- Array.range (0, n)]
+               in if null pairs then Unknown else maximum pairs
             )
             | (i, j) <- Array.range ((0, 0), (m, p))
           ]
@@ -140,8 +150,8 @@ mkSCG :: Int -> Int -> [((Int, Int), Decrease)] -> SCG
 mkSCG n m = SCG . Array.accumArray max Unknown ((0, 0), (n, m))
 
 -- | Check if every entry in a size-change graph matrix is more defined than another.
-isStrongerSCGThan :: SCG -> SCG -> Bool
-isStrongerSCGThan (SCG graph1) (SCG graph2)
+isAsStrongAsSCG :: SCG -> SCG -> Bool
+isAsStrongAsSCG (SCG graph1) (SCG graph2)
   | n /= m = pprPanic "Incompatible size-change graph dimensions!" (ppr (n, m))
   | otherwise = all (\ij -> graph1 Array.! ij >= graph2 Array.! ij) (Array.range ((0, 0), n))
   where
@@ -167,6 +177,11 @@ data Decrease
   | -- | Target is known to be smaller than the source.
     Decrease
   deriving stock (Eq, Ord)
+
+instance Outputable Decrease where
+  ppr Unknown = text "?"
+  ppr Equal = text "<="
+  ppr Decrease = text "<"
 
 instance Semigroup Decrease where
   Unknown <> _ = Unknown

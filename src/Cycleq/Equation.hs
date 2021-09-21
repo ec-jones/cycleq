@@ -16,7 +16,10 @@ data Equation = Equation
   }
 
 instance Outputable Equation where
-  ppr Equation {equationLeft, equationRight} =
+  ppr Equation {equationVars, equationLeft, equationRight} =
+    -- ppUnless (null equationVars)
+    --  (forAllLit <+> interpp'SP equationVars GHC.Plugins.<> dot)
+    --   <+>
     ppr equationLeft <+> text "≃" <+> ppr equationRight
 
 -- | Apply a substitution to both sides of an equation.

@@ -13,8 +13,8 @@ import Cycleq.Edge
 import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
-import qualified Data.List as List
 import qualified Data.IntMap as IntMap
+import qualified Data.List as List
 import Data.Maybe
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
@@ -55,21 +55,29 @@ insertNode equation = do
   proof <- get
   case IntMap.lookupMax (proofNodes proof) of
     Nothing -> do
-      put (proof {proofNodes = IntMap.singleton 0 equation, 
-                    incompleteNodes = incompleteNodes proof ++ [0]})
+      put
+        ( proof
+            { proofNodes = IntMap.singleton 0 equation,
+              incompleteNodes = incompleteNodes proof ++ [0]
+            }
+        )
       pure 0
     Just (n, _) -> do
-      put (proof {proofNodes = IntMap.insert (n + 1) equation (proofNodes proof), 
-                  incompleteNodes = incompleteNodes proof ++ [n + 1]})
+      put
+        ( proof
+            { proofNodes = IntMap.insert (n + 1) equation (proofNodes proof),
+              incompleteNodes = incompleteNodes proof ++ [n + 1]
+            }
+        )
       pure (n + 1)
 
 -- | Mark a node as completed.
 markNodeAsComplete :: Member (State Proof) es => Node -> Eff es ()
-markNodeAsComplete node = modify (\proof -> proof { incompleteNodes = node `List.delete` incompleteNodes proof })
+markNodeAsComplete node = modify (\proof -> proof {incompleteNodes = node `List.delete` incompleteNodes proof})
 
 -- | The set of complete proof nodes
 completeProofNodes :: Proof -> [Node]
-completeProofNodes Proof { proofNodes, incompleteNodes } = 
+completeProofNodes Proof {proofNodes, incompleteNodes} =
   IntMap.keys proofNodes List.\\ incompleteNodes
 
 -- | Get the equation of a given node.
@@ -84,6 +92,7 @@ lookupNode node = do
 insertEdge :: (Member NonDet es, Member (State Proof) es) => Edge -> Node -> Node -> Eff es ()
 insertEdge edge source target
   | source == target, not (isWellFounded edge) = empty
+  | pprTrace "edge" (ppr (source, target)) False = undefined
   | otherwise = do
     proof@Proof {proofEdges} <- get
     let (change, edges) = alterAdjMap alterEdge source target proofEdges
@@ -93,8 +102,9 @@ insertEdge edge source target
   where
     alterEdge Nothing = (True, edge)
     alterEdge (Just edge')
-      | edge `isStrongerEdgeThan` edge' = (False, edge' { edgeLabel = edgeLabel edge <|> edgeLabel edge' })
-      | edge' `isStrongerEdgeThan` edge = (True, edge { edgeLabel = edgeLabel edge <|> edgeLabel edge' })
+      | pprTrace "edge" (ppr (edge, edge', unionEdges edge edge')) False = undefined
+      | edge `isAsStrongAsEdge` edge' = (False, edge' {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
+      | edge' `isAsStrongAsEdge` edge = (True, edge {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
       | otherwise = (True, unionEdges edge edge')
 
     close edges = do

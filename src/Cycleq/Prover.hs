@@ -1,11 +1,11 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 
@@ -40,8 +40,9 @@ prover equation = do
     go ((fuel, proof) : proofs)
       | fuel <= 0 = go proofs
       | otherwise = do
-        proofs' <- makeChoiceA
-                    (execState proof step :: Eff (NonDet ': _) Proof)
+        proofs' <-
+          makeChoiceA
+            (execState proof step :: Eff (NonDet ': _) Proof)
         case List.find (null . incompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
@@ -60,9 +61,10 @@ step = do
     [] -> pure ()
     (node : _) -> do
       equation <- lookupNode node
-      -- send $ putMsg (ppr node)
-      send $ putMsg (ppr node GHC.Plugins.<> text ":" 
-                              <+> ppr equation)
+      when
+        (equationAbsurd equation)
+        empty
+      send $ putMsg (ppr node GHC.Plugins.<> text ":" <+> ppr equation)
       local
         (extendContextFreeVars (equationVars equation))
         (reduceEquation equation)
@@ -85,8 +87,9 @@ step = do
                 step
             )
               <|> ( do
-                        equations' <- consCong equation
-                        nodes' <- mapM
+                      equations' <- consCong equation
+                      nodes' <-
+                        mapM
                           ( \equation' -> do
                               node' <- insertNode equation'
                               insertEdge (identityEdge equation equation') node node'
@@ -94,60 +97,58 @@ step = do
                           )
                           equations'
 
-                        send (putMsg $ text "Cong: " <+> ppr nodes')
-                        markNodeAsComplete node
-                        step
-                    )
+                      send (putMsg $ text "Cong: " <+> ppr nodes')
+                      markNodeAsComplete node
+                      step
+                  )
               <|> ( do
-                        equation' <- funExt equation
-                        node' <- insertNode equation'
-                        insertEdge (identityEdge equation equation') node node'
+                      equation' <- funExt equation
+                      node' <- insertNode equation'
+                      insertEdge (identityEdge equation equation') node node'
 
-                        send (putMsg $ text "FunExt: " <+> ppr [node'])
+                      send (putMsg $ text "FunExt: " <+> ppr [node'])
+                      markNodeAsComplete node
+                      step
+                  )
+              <|> ( do
+                      -- Select a lemma node
+                      node' <- gets completeProofNodes >>= (msum . fmap pure)
+                      equation' <- lookupNode node'
+
+                      -- Rewrite current goal
+                      (subst, equation'') <- superpose equation equation'
+                      node'' <- insertNode equation''
+
+                      -- Add edges
+                      insertEdge (identityEdge equation equation'') node node''
+                      insertEdge (substEdge subst equation equation') node node'
+
+                      send (putMsg $ text "Super: " <+> ppr [node', node''])
+                      markNodeAsComplete node
+                  )
+              <|> ( case mx of
+                      Nothing -> empty
+                      Just x -> do
+                        nodes' <-
+                          casesOf x
+                            >>= mapM
+                              ( \(k, xs) -> do
+                                  Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
+                                  let subst = mkOpenSubst contextInScopeSet [(x, mkConApp k (fmap Var xs))]
+                                      equation' =
+                                        substEquation
+                                          subst
+                                          equation
+                                            { equationVars = xs ++ (x `List.delete` equationVars equation)
+                                            }
+                                  node' <- insertNode equation'
+                                  insertEdge (caseEdge x xs equation equation') node node'
+                                  pure node'
+                              )
+
+                        send (putMsg $ text "Case: " <+> ppr nodes')
                         markNodeAsComplete node
-                        step
-                    )
-              <|>  ( do
-                          -- Select a lemma node
-                          node' <- gets completeProofNodes >>= (msum . fmap pure)
-                          equation' <- lookupNode node'
-
-                          -- Rewrite current goal
-                          (subst, equation'') <- superpose equation equation'
-                          node'' <- insertNode equation''
-
-                          -- Add edges
-                          insertEdge (identityEdge equation equation'') node node''
-                          insertEdge (substEdge subst equation equation') node node'
-
-                          send (putMsg $ text "Super: " <+> ppr [node', node''])
-                          markNodeAsComplete node
-                      )
-                <|>
-                        (
-                        case mx of
-                          Nothing -> empty
-                          Just x -> do
-                            nodes' <- 
-                              casesOf x
-                                >>= mapM
-                                  ( \(k, xs) -> do
-                                      Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
-                                      let subst = mkOpenSubst contextInScopeSet [(x, mkConApp k (fmap Var xs))]
-                                          equation' =
-                                            substEquation
-                                              subst
-                                              equation
-                                                { equationVars = xs ++ (x `List.delete` equationVars equation)
-                                                }
-                                      node' <- insertNode equation'
-                                      insertEdge (caseEdge x xs equation equation') node node'
-                                      pure node'
-                                  )
-
-                            send (putMsg $ text "Case: " <+> ppr nodes')
-                            markNodeAsComplete node
-                    )
+                  )
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: (Member (Reader Context) es) => Equation -> Eff es (Either Equation (Maybe Id))
@@ -212,10 +213,10 @@ superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
       subst <- match equationVars contextInScopeSet equationLeft expr
       pure (subst, ctx (substExpr subst equationRight))
     )
-      <|> ( do
-                     subst <- match equationVars contextInScopeSet equationRight expr
-                     pure (subst, ctx (substExpr subst equationLeft))
-                 )
+    <|> ( do
+            subst <- match equationVars contextInScopeSet equationRight expr
+            pure (subst, ctx (substExpr subst equationLeft))
+        )
 
 -- | Find an instance of the first expression that is alpha equivalent to the second.
 match :: forall es. Member NonDet es => [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> Eff es Subst
