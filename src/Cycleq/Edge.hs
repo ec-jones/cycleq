@@ -1,4 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE NamedFieldPuns #-}
 
 module Cycleq.Edge where
 
@@ -22,6 +23,9 @@ instance Semigroup Edge where
       { edgeSCGs = liftA2 (<>) (edgeSCGs edge1) (edgeSCGs edge2),
         edgeLabel = Nothing
       }
+
+instance Outputable Edge where
+  ppr Edge {edgeLabel} = ppr edgeLabel
 
 -- | An identity edge where shared variables haven't changed.
 identityEdge :: Equation -> Equation -> Edge
@@ -89,7 +93,7 @@ unionEdges :: Edge -> Edge -> Edge
 unionEdges edge1 edge2 =
   Edge
     { edgeSCGs = Foldable.foldl' insert (edgeSCGs edge1) (edgeSCGs edge2),
-      edgeLabel = edgeLabel edge1
+      edgeLabel = edgeLabel edge1 <|> edgeLabel edge2
     }
 
 -- | Add a size-change graph to a set if it is not subsumed.

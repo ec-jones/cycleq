@@ -18,7 +18,7 @@ import qualified Data.IntMap as IntMap
 import Data.Maybe
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
-import GHC.Plugins hiding (empty, (<>))
+import GHC.Plugins hiding (empty)
 import System.IO
 import System.Process
 
@@ -56,11 +56,11 @@ insertNode equation = do
   case IntMap.lookupMax (proofNodes proof) of
     Nothing -> do
       put (proof {proofNodes = IntMap.singleton 0 equation, 
-                    incompleteNodes = 0 : incompleteNodes proof})
+                    incompleteNodes = incompleteNodes proof ++ [0]})
       pure 0
     Just (n, _) -> do
       put (proof {proofNodes = IntMap.insert (n + 1) equation (proofNodes proof), 
-                  incompleteNodes = n + 1 : incompleteNodes proof})
+                  incompleteNodes = incompleteNodes proof ++ [n + 1]})
       pure (n + 1)
 
 -- | Mark a node as completed.
@@ -93,15 +93,15 @@ insertEdge edge source target
   where
     alterEdge Nothing = (True, edge)
     alterEdge (Just edge')
-      | edge `isStrongerEdgeThan` edge' = (False, edge')
-      | edge' `isStrongerEdgeThan` edge = (True, edge)
+      | edge `isStrongerEdgeThan` edge' = (False, edge' { edgeLabel = edgeLabel edge <|> edgeLabel edge' })
+      | edge' `isStrongerEdgeThan` edge = (True, edge { edgeLabel = edgeLabel edge <|> edgeLabel edge' })
       | otherwise = (True, unionEdges edge edge')
 
     close edges = do
       let succs = fromMaybe IntMap.empty (IntMap.lookup target edges)
           preds = IntMap.mapMaybe (IntMap.lookup source) edges
-      _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge <> edge') source node) succs
-      _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge' <> edge) node target) preds
+      _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge Prelude.<> edge') source node) succs
+      _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge' Prelude.<> edge) node target) preds
       pure ()
 
 -- | Write a proof out as SVG using the @dot@ system command.
@@ -131,8 +131,8 @@ drawProof proof path = do
             [ NodeAttrs [FontName (Text.pack "courier")],
               EdgeAttrs [FontName (Text.pack "courier")]
             ],
-          fmtNode = \(_, n) ->
-            [ textLabel (Text.pack (showSDoc dynFlags (ppr n)))
+          fmtNode = \(i, n) ->
+            [ textLabel (Text.pack (showSDoc dynFlags (ppr i GHC.Plugins.<> text ":" <+> ppr n)))
             ],
           fmtEdge = \(_, _, l) -> [textLabel (Text.pack (showSDoc dynFlags l))]
         }

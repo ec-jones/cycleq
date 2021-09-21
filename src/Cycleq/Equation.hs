@@ -2,8 +2,8 @@
 
 module Cycleq.Equation where
 
-import GHC.Plugins
 import Data.Bifunctor
+import GHC.Plugins
 
 -- | A simple equation between core expressions.
 data Equation = Equation
@@ -21,25 +21,30 @@ instance Outputable Equation where
 
 -- | Apply a substitution to both sides of an equation.
 substEquation :: Subst -> Equation -> Equation
-substEquation subst eq = eq {
-  equationLeft = substExpr subst (equationLeft eq),
-  equationRight = substExpr subst (equationRight eq)
-}
+substEquation subst eq =
+  eq
+    { equationLeft = substExpr subst (equationLeft eq),
+      equationRight = substExpr subst (equationRight eq)
+    }
 
+-- | Subterms of either side of an equation
 subtermEquation :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
 subtermEquation equation =
   let lefts = subterms (equationLeft equation)
       rights = subterms (equationRight equation)
-  in fmap (second (\k expr -> equation { equationLeft = k expr })) lefts ++ 
-        fmap (second (\k expr -> equation { equationRight = k expr })) rights
+   in fmap (second (\k expr -> equation {equationLeft = k expr})) lefts
+        ++ fmap (second (\k expr -> equation {equationRight = k expr})) rights
 
 -- | Subterms of a core expression.
 subterms :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
 subterms (Var x) = [(Var x, id)]
 subterms (Lit lit) = [(Lit lit, id)]
-subterms (App fun arg) = (App fun arg, id) : (subterms fun ++ subterms arg)
-subterms (Lam x body) = (Lam x body, id) : subterms body
-subterms (Let bind body) = (Let bind body, id) : subterms body
+subterms (App fun arg) =
+  (App fun arg, id) :
+  fmap (second (\k expr -> App (k expr) arg)) (subterms fun)
+    ++ fmap (second (\k -> App fun . k)) (subterms arg)
+subterms (Lam x body) = (Lam x body, id) : fmap (second (\k -> Lam x . k)) (subterms body)
+subterms (Let bind body) = (Let bind body, id) : fmap (second (\k -> Let bind . k)) (subterms body)
 subterms _ = []
 
 -- | Interpret a core expression as an equation.
@@ -49,12 +54,12 @@ fromCore srcExpr =
     (Var op, [ty, lhs, rhs])
       | occName op == mkVarOcc "≃" ->
         Equation
-              { equationType = exprToType ty,
-                equationVars = xs,
-                equationLeft = cleanCore lhs,
-                equationRight = cleanCore rhs,
-                equationAbsurd = False
-              }
+          { equationType = exprToType ty,
+            equationVars = xs,
+            equationLeft = cleanCore lhs,
+            equationRight = cleanCore rhs,
+            equationAbsurd = False
+          }
     nonEq -> pprPanic "Couldn't interpret core expression as equation!" (ppr srcExpr)
   where
     (xs, body) = collectBinders srcExpr

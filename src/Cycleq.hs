@@ -11,6 +11,7 @@ import Control.Monad.Freer.Reader
 import Control.Monad.Freer.State
 import Cycleq.Prover
 import Cycleq.Equation
+import Data.Maybe
 import Cycleq.Proof
 import Cycleq.Reduction
 import GHC.Plugins hiding (empty)
@@ -40,13 +41,9 @@ plugin =
               [] -> pure ()
               (main : _) -> do
                 let equation = fromCore main
-                proof <-
-                  runM $
-                    makeChoiceA
-                      ( execState
-                          emptyProof
-                          (runReader (mkContext (cleanBind <$> mg_binds mguts)) (prover equation))
-                      )
-                drawProof (head proof) "proof.svg"
+                    context = mkContext (cleanBind <$> mg_binds mguts)
+                proof <- fromJust <$> runM (runReader context (prover equation))
+                putMsg (ppr $ proofEdges proof)
+                drawProof proof "proof.svg"
             pure mguts
         )
