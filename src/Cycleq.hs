@@ -6,9 +6,7 @@ module Cycleq
 where
 
 import Control.Monad.Freer
-import Control.Monad.Freer.NonDet
 import Control.Monad.Freer.Reader
-import Control.Monad.Freer.State
 import Cycleq.Prover
 import Cycleq.Equation
 import Data.Maybe

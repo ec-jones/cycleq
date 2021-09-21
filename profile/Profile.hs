@@ -10,7 +10,7 @@ import Control.Monad
 import Control.Monad.IO.Class
 import System.Environment
 
--- cabal new-profile -- +RTS -pj -l-au
+-- cabal run profile -- +RTS -pj -l-au
 -- https://www.speedscope.app/
 
 initGhcM :: [String] -> Ghc ()
@@ -20,7 +20,7 @@ initGhcM xs = do
   let cmdOpts = "-fforce-recomp" : xs
   (df2, leftovers, warns) <- G.parseDynamicFlags df1' (map G.noLoc cmdOpts)
   setSessionDynFlags df2
-  ts <- mapM (flip G.guessTarget Nothing) $ map unLoc leftovers
+  ts <- mapM (flip G.guessTarget Nothing . unLoc) leftovers
 
   setTargets ts
 

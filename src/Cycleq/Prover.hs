@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
@@ -83,7 +82,7 @@ step = do
                     (extendContextFreeVars (equationVars equation))
                     (refl equation)
 
-                  send (putMsg $ text "Refl: " <+> ppr ([] :: [Node]))
+                  send (putMsg $ text "Refl: []")
                   markNodeAsComplete node Cycleq.Proof.Refl
                   step,
                 -- Cong
@@ -171,7 +170,7 @@ refl Equation {equationLeft, equationRight} = do
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
 consCong :: Member NonDet es => Equation -> Eff es [Equation]
-consCong eq@Equation {equationLeft = ConApp con ((filter isValArg) -> args), equationRight = ConApp con' ((filter isValArg) -> args')}
+consCong eq@Equation {equationLeft = ConApp con (filter isValArg -> args), equationRight = ConApp con' (filter isValArg -> args')}
   | con == con' = pure (zipWith (\arg arg' -> eq {equationLeft = arg, equationRight = arg'}) args args')
   | otherwise = pure [eq {equationAbsurd = True}]
 consCong eq@Equation {equationLeft = Lit' lit, equationRight = Lit' lit'}
@@ -181,17 +180,17 @@ consCong _ = empty
 
 -- | Create a fresh variable as an argument to both sides.
 funExt :: (Member NonDet es, Member CoreM es) => Equation -> Eff es Equation
-funExt Equation {equationType, equationVars, equationLeft, equationRight} = do
-  guard (isFunTy equationType)
-  x <- freshVar (funArgTy equationType)
+funExt Equation {equationVars, equationLeft, equationRight} = do
+  let ty = exprType equationLeft
+  guard (isFunTy ty)
+  x <- freshVar (funArgTy ty)
   pure
     Equation
-      { equationType = funResultTy equationType,
-        equationVars = x : equationVars,
-        equationLeft = App equationLeft (Var x),
-        equationRight = App equationRight (Var x),
-        equationAbsurd = False
-      }
+    { equationVars = x : equationVars,
+      equationLeft = App equationLeft (Var x),
+      equationRight = App equationRight (Var x),
+      equationAbsurd = False
+    }
 
 -- | Generate a fresh instance for each possible constructor.
 casesOf :: Member CoreM es => TyCon -> [Type] -> Eff es [(DataCon, [Var])]

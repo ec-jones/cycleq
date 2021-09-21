@@ -7,8 +7,7 @@ import GHC.Plugins
 
 -- | A simple equation between core expressions.
 data Equation = Equation
-  { equationType :: Type,
-    equationVars :: [Id],
+  { equationVars :: [Id],
     equationLeft :: CoreExpr,
     equationRight :: CoreExpr,
     -- | Is the equation visibly invalid?
@@ -57,8 +56,7 @@ fromCore srcExpr =
     (Var op, [ty, lhs, rhs])
       | occName op == mkVarOcc "≃" ->
         Equation
-          { equationType = exprToType ty,
-            equationVars = filter isId xs,
+          { equationVars = filter isId xs,
             equationLeft = lhs,
             equationRight = rhs,
             equationAbsurd = False
