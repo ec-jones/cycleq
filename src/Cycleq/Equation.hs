@@ -20,7 +20,7 @@ instance Outputable Equation where
     -- ppUnless (null equationVars)
     --  (forAllLit <+> interpp'SP equationVars GHC.Plugins.<> dot)
     --   <+>
-    ppr equationLeft <+> text "≃" <+> ppr equationRight
+    ppr (cleanCore True equationLeft) <+> text "≃" <+> ppr (cleanCore True equationRight)
 
 -- | Apply a substitution to both sides of an equation.
 substEquation :: Subst -> Equation -> Equation
@@ -65,4 +65,30 @@ fromCore srcExpr =
           }
     nonEq -> pprPanic "Couldn't interpret core expression as equation!" (ppr srcExpr)
   where
-    (xs, body) = collectBinders srcExpr
+    (xs, body) = collectBinders (cleanCore False srcExpr)
+
+-- | Remove any ticks, cast, coercsions or types from a core expression.
+cleanCore :: Bool -> CoreExpr -> CoreExpr
+cleanCore p (Var x) = Var x
+cleanCore p (Lit lit) = Lit lit
+cleanCore p (App fun arg)
+  | isValArg arg || not p = App (cleanCore p fun) (cleanCore p arg)
+  | otherwise = cleanCore p fun
+cleanCore p (Lam x body)
+  | isId x || not p = Lam x (cleanCore p body)
+  | otherwise = cleanCore p body
+cleanCore p (Let bind body) = Let (cleanBind p bind) (cleanCore p body)
+cleanCore p (Case scrut x ty cases) = Case (cleanCore p scrut) x ty (map (cleanAlt p) cases)
+cleanCore p (Cast expr _) = cleanCore p expr
+cleanCore p (Tick _ expr) = cleanCore p expr
+cleanCore p (Type ty) = Type ty
+cleanCore p srcExpr = pprPanic "Couldn't clean core expression!" (ppr srcExpr)
+
+-- | Clean every expression in a program.
+cleanBind :: Bool -> CoreBind -> CoreBind
+cleanBind p (NonRec x defn) = NonRec x (cleanCore p defn)
+cleanBind p (Rec defns) = Rec (map (second $ cleanCore p) defns)
+
+-- | Clean case alternative.
+cleanAlt :: Bool -> CoreAlt -> CoreAlt
+cleanAlt p (ac, xs, rhs) = (ac, xs, cleanCore p rhs)

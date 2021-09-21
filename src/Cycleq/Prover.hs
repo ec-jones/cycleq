@@ -3,12 +3,12 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MonoLocalBinds #-}
-{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
+{-# LANGUAGE ViewPatterns #-}
 
 module Cycleq.Prover where
 
@@ -41,9 +41,7 @@ prover equation = do
     go ((fuel, proof) : proofs)
       | fuel <= 0 = go proofs
       | otherwise = do
-        proofs' <-
-          makeChoiceA
-            (execState proof step :: Eff (NonDet ': _) Proof)
+        proofs' <- makeChoiceA (execState proof step)
         case List.find (null . incompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
@@ -83,7 +81,7 @@ step = do
                   (extendContextFreeVars (equationVars equation))
                   (refl equation)
 
-                send (putMsg $ text "Refl: " <+> ppr ([] :: [Node]))
+                send (putMsg $ text "Refl: []")
                 markNodeAsComplete node
                 step
             )
@@ -113,7 +111,7 @@ step = do
                   )
               <|> ( do
                       -- Select a lemma node
-                      node' <- gets completeProofNodes >>= (msum . fmap pure)
+                      node' <- gets completeProofNodes >>= choose
                       equation' <- lookupNode node'
 
                       -- Rewrite current goal
@@ -131,25 +129,25 @@ step = do
                       Nothing -> empty
                       Just x
                         | TyConApp dty tyargs <- idType x -> do
-                            nodes' <-
-                              casesOf dty tyargs
-                                >>= mapM
-                                  ( \(k, xs) -> do
-                                      Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
-                                      let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
-                                          equation' =
-                                            substEquation
-                                              subst
-                                              equation
-                                                { equationVars = xs ++ (x `List.delete` equationVars equation)
-                                                }
-                                      node' <- insertNode equation'
-                                      insertEdge (caseEdge x xs equation equation') node node'
-                                      pure node'
-                                  )
+                          nodes' <-
+                            casesOf dty tyargs
+                              >>= mapM
+                                ( \(k, xs) -> do
+                                    Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
+                                    let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
+                                        equation' =
+                                          substEquation
+                                            subst
+                                            equation
+                                              { equationVars = xs ++ (x `List.delete` equationVars equation)
+                                              }
+                                    node' <- insertNode equation'
+                                    insertEdge (caseEdge x xs equation equation') node node'
+                                    pure node'
+                                )
 
-                            send (putMsg $ text "Case: " <+> ppr nodes')
-                            markNodeAsComplete node
+                          send (putMsg $ text "Case: " <+> ppr nodes')
+                          markNodeAsComplete node
                         | otherwise -> empty
                   )
 
@@ -209,7 +207,8 @@ freshVar ty = do
 superpose :: (Member (Reader Context) es, Member NonDet es, Member CoreM es) => Equation -> Equation -> Eff es (Subst, Equation)
 superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
   Context {contextInScopeSet} <- asks (extendContextFreeVars equationVars)
-  (expr, ctx) <- (msum . fmap pure) (subtermEquation goal)
+  (expr, ctx) <- choose (subtermEquation goal)
+  guard (isNonVar expr)
   ( do
       guard (isNonVar equationLeft)
       subst <- match equationVars contextInScopeSet equationLeft expr
@@ -265,12 +264,6 @@ cut m1 m2 =
     Nothing -> m2
     Just (a, m1') -> pure a
 
-infixr 3 `interleave`
-
--- | Fair disjunction
-interleave :: Member NonDet es => Eff es a -> Eff es a -> Eff es a
-interleave m1 m2 =
-  msplit m1 >>= \case
-    Nothing -> m2
-    Just (a, m1') ->
-      pure a <|> interleave m2 m1'
+-- | Choose an element from a list.
+choose :: Member NonDet es => [a] -> Eff es a
+choose = msum . fmap pure

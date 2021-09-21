@@ -52,8 +52,14 @@ test-suite test
   build-depends:      base, cycleq
 
   ghc-options:        -fplugin Cycleq
-                      -- -fno-enable-rewrite-rules
 
-  default-extensions: NoImplicitPrelude
+  default-language:   Haskell2010
 
-  default-language:   Haskell98
+executable profile
+  main-is:          Profile.hs
+
+  hs-source-dirs:   profile
+
+  build-depends:    base, ghc, cycleq
+
+  default-language: Haskell2010

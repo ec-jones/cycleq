@@ -41,7 +41,7 @@ plugin =
               [] -> pure ()
               (main : _) -> do
                 let equation = fromCore main
-                    context = mkContext (mg_binds mguts)
+                    context = mkContext (cleanBind False <$> mg_binds mguts)
                 proof <- fromJust <$> runM (runReader context (prover equation))
                 drawProof proof "proof.svg"
             pure mguts
