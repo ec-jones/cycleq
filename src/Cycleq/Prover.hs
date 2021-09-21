@@ -3,6 +3,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MonoLocalBinds #-}
+{-# LANGUAGE ViewPatterns #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -128,26 +129,28 @@ step = do
                   )
               <|> ( case mx of
                       Nothing -> empty
-                      Just x -> do
-                        nodes' <-
-                          casesOf x
-                            >>= mapM
-                              ( \(k, xs) -> do
-                                  Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
-                                  let subst = mkOpenSubst contextInScopeSet [(x, mkConApp k (fmap Var xs))]
-                                      equation' =
-                                        substEquation
-                                          subst
-                                          equation
-                                            { equationVars = xs ++ (x `List.delete` equationVars equation)
-                                            }
-                                  node' <- insertNode equation'
-                                  insertEdge (caseEdge x xs equation equation') node node'
-                                  pure node'
-                              )
+                      Just x
+                        | TyConApp dty tyargs <- idType x -> do
+                            nodes' <-
+                              casesOf dty tyargs
+                                >>= mapM
+                                  ( \(k, xs) -> do
+                                      Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
+                                      let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
+                                          equation' =
+                                            substEquation
+                                              subst
+                                              equation
+                                                { equationVars = xs ++ (x `List.delete` equationVars equation)
+                                                }
+                                      node' <- insertNode equation'
+                                      insertEdge (caseEdge x xs equation equation') node node'
+                                      pure node'
+                                  )
 
-                        send (putMsg $ text "Case: " <+> ppr nodes')
-                        markNodeAsComplete node
+                            send (putMsg $ text "Case: " <+> ppr nodes')
+                            markNodeAsComplete node
+                        | otherwise -> empty
                   )
 
 -- | Try to reduce either side of an equation.
@@ -168,7 +171,7 @@ refl Equation {equationLeft, equationRight} = do
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
 consCong :: Member NonDet es => Equation -> Eff es [Equation]
-consCong eq@Equation {equationLeft = ConApp con args, equationRight = ConApp con' args'}
+consCong eq@Equation {equationLeft = ConApp con ((filter isValArg) -> args), equationRight = ConApp con' ((filter isValArg) -> args')}
   | con == con' = pure (zipWith (\arg arg' -> eq {equationLeft = arg, equationRight = arg'}) args args')
   | otherwise = pure [eq {equationAbsurd = True}]
 consCong eq@Equation {equationLeft = Lit' lit, equationRight = Lit' lit'}
@@ -191,11 +194,9 @@ funExt Equation {equationType, equationVars, equationLeft, equationRight} = do
       }
 
 -- | Generate a fresh instance for each possible constructor.
-casesOf :: (Member NonDet es, Member CoreM es) => Id -> Eff es [(DataCon, [Var])]
-casesOf x
-  | TyConApp dty tyargs <- idType x =
-    mapM (\con -> (con,) <$> mapM freshVar (scaledThing <$> dataConInstArgTys con tyargs)) (tyConDataCons dty)
-  | otherwise = empty
+casesOf :: Member CoreM es => TyCon -> [Type] -> Eff es [(DataCon, [Var])]
+casesOf dty tyargs =
+  mapM (\con -> (con,) <$> mapM freshVar (scaledThing <$> dataConInstArgTys con tyargs)) (tyConDataCons dty)
 
 -- | Create a fresh variable of a given type.
 freshVar :: Member CoreM es => Type -> Eff es Id
@@ -210,19 +211,24 @@ superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
   Context {contextInScopeSet} <- asks (extendContextFreeVars equationVars)
   (expr, ctx) <- (msum . fmap pure) (subtermEquation goal)
   ( do
+      guard (isNonVar equationLeft)
       subst <- match equationVars contextInScopeSet equationLeft expr
       pure (subst, ctx (substExpr subst equationRight))
     )
     <|> ( do
+            guard (isNonVar equationRight)
             subst <- match equationVars contextInScopeSet equationRight expr
             pure (subst, ctx (substExpr subst equationLeft))
         )
+  where
+    isNonVar (Var _) = False
+    isNonVar _ = True
 
 -- | Find an instance of the first expression that is alpha equivalent to the second.
 match :: forall es. Member NonDet es => [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> Eff es Subst
-match univs scope expr1 expr2 =
-  runReader (mkRnEnv2 scope) $
-    execState (mkEmptySubst scope) (go expr1 expr2)
+match univs scope expr1 expr2 = do
+  guard (eqType (exprType expr1) (exprType expr2))
+  runReader (mkRnEnv2 scope) $ execState (mkEmptySubst scope) (go expr1 expr2)
   where
     go :: CoreExpr -> CoreExpr -> Eff (State Subst ': Reader RnEnv2 ': es) ()
     go (Var x) e
@@ -237,7 +243,7 @@ match univs scope expr1 expr2 =
       | otherwise = empty
     go (App fun1 arg1) (App fun2 arg2) = do
       go fun1 fun2
-      go arg1 arg2
+      when (isValArg arg1) (go arg1 arg2)
     go (Lam x1 body1) (Lam x2 body2) =
       local
         (\env -> rnBndr2 env x1 x2)

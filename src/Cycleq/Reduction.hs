@@ -112,7 +112,7 @@ reduce expr = mkReduct expr <$> runState Nothing (makeChoiceA $ runState False (
       case scrut' of
         ConApp con args
           | Just (_, patVars, rhs) <- findAlt (DataAlt con) alts -> do
-            let subst = mkOpenSubst contextInScopeSet ((x, scrut') : zip patVars args)
+            let subst = mkOpenSubst contextInScopeSet ((x, scrut') : zip patVars (filter isValArg args))
             put True
             go (substExpr subst rhs) []
         Lit' lit
@@ -120,6 +120,7 @@ reduce expr = mkReduct expr <$> runState Nothing (makeChoiceA $ runState False (
             put True
             go rhs []
         nonCon -> empty
+    go (Type ty) args = pure (mkApps (Type ty) args)
     go expr' args = pprPanic "Could not reduce expression!" (ppr (mkApps expr' args))
 
 -- * Pattern Utilities

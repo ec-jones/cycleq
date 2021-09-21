@@ -92,7 +92,7 @@ lookupNode node = do
 insertEdge :: (Member NonDet es, Member (State Proof) es) => Edge -> Node -> Node -> Eff es ()
 insertEdge edge source target
   | source == target, not (isWellFounded edge) = empty
-  | pprTrace "edge" (ppr (source, target)) False = undefined
+  -- | pprTrace "edge" (ppr (source, target)) False = undefined
   | otherwise = do
     proof@Proof {proofEdges} <- get
     let (change, edges) = alterAdjMap alterEdge source target proofEdges
@@ -102,7 +102,7 @@ insertEdge edge source target
   where
     alterEdge Nothing = (True, edge)
     alterEdge (Just edge')
-      | pprTrace "edge" (ppr (edge, edge', unionEdges edge edge')) False = undefined
+      -- | pprTrace "edge" (ppr (edge, edge', unionEdges edge edge')) False = undefined
       | edge `isAsStrongAsEdge` edge' = (False, edge' {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
       | edge' `isAsStrongAsEdge` edge = (True, edge {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
       | otherwise = (True, unionEdges edge edge')

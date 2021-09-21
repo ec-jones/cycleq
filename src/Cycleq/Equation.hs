@@ -58,36 +58,11 @@ fromCore srcExpr =
       | occName op == mkVarOcc "≃" ->
         Equation
           { equationType = exprToType ty,
-            equationVars = xs,
-            equationLeft = cleanCore lhs,
-            equationRight = cleanCore rhs,
+            equationVars = filter isId xs,
+            equationLeft = lhs,
+            equationRight = rhs,
             equationAbsurd = False
           }
     nonEq -> pprPanic "Couldn't interpret core expression as equation!" (ppr srcExpr)
   where
     (xs, body) = collectBinders srcExpr
-
--- | Remove any ticks, cast, coercsions or types from a core expression.
-cleanCore :: CoreExpr -> CoreExpr
-cleanCore (Var x) = Var x
-cleanCore (Lit lit) = Lit lit
-cleanCore (App fun arg)
-  | isValArg arg = App (cleanCore fun) (cleanCore arg)
-  | otherwise = cleanCore fun
-cleanCore (Lam x body)
-  | isId x = Lam x (cleanCore body)
-  | otherwise = cleanCore body
-cleanCore (Let bind body) = Let (cleanBind bind) (cleanCore body)
-cleanCore (Case scrut x ty cases) = Case (cleanCore scrut) x ty (map cleanAlt cases)
-cleanCore (Cast expr _) = cleanCore expr
-cleanCore (Tick _ expr) = cleanCore expr
-cleanCore srcExpr = pprPanic "Couldn't clean core expression!" (ppr srcExpr)
-
--- | Clean every expression in a program.
-cleanBind :: CoreBind -> CoreBind
-cleanBind (NonRec x defn) = NonRec x (cleanCore defn)
-cleanBind (Rec defns) = Rec (map (second cleanCore) defns)
-
--- | Clean case alternative.
-cleanAlt :: CoreAlt -> CoreAlt
-cleanAlt (ac, xs, rhs) = (ac, xs, cleanCore rhs)
