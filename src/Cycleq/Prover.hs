@@ -73,83 +73,85 @@ step = do
             insertEdge (identityEdge equation equation') node node'
 
             send (putMsg $ text "Reduct: " <+> ppr [node'])
-            markNodeAsComplete node
+            markNodeAsComplete node Reduce
             step
           Right mx ->
-            ( do
-                local
-                  (extendContextFreeVars (equationVars equation))
-                  (refl equation)
+            msum
+              [ -- Refl
+                do
+                  local
+                    (extendContextFreeVars (equationVars equation))
+                    (refl equation)
 
-                send (putMsg $ text "Refl: []")
-                markNodeAsComplete node
-                step
-            )
-              <|> ( do
-                      equations' <- consCong equation
+                  send (putMsg $ text "Refl: " <+> ppr ([] :: [Node]))
+                  markNodeAsComplete node Cycleq.Proof.Refl
+                  step,
+                -- Cong
+                do
+                  equations' <- consCong equation
+                  nodes' <-
+                    mapM
+                      ( \equation' -> do
+                          node' <- insertNode equation'
+                          insertEdge (identityEdge equation equation') node node'
+                          pure node'
+                      )
+                      equations'
+
+                  send (putMsg $ text "Cong: " <+> ppr nodes')
+                  markNodeAsComplete node Cong
+                  step,
+                -- FunExt
+                do
+                  equation' <- funExt equation
+                  node' <- insertNode equation'
+                  insertEdge (identityEdge equation equation') node node'
+
+                  send (putMsg $ text "FunExt: " <+> ppr [node'])
+                  markNodeAsComplete node FunExt
+                  step,
+                -- Super
+                do
+                  -- Select a lemma node
+                  node' <- gets caseProofNodes >>= choose
+                  equation' <- lookupNode node'
+
+                  -- Rewrite current goal
+                  (subst, equation'') <- superpose equation equation'
+                  node'' <- insertNode equation''
+
+                  -- Add edges
+                  insertEdge (identityEdge equation equation'') node node''
+                  insertEdge (substEdge subst equation equation') node node'
+
+                  send (putMsg $ text "Super: " <+> ppr [node', node''])
+                  markNodeAsComplete node Super,
+                -- Case
+                case mx of
+                  Nothing -> empty
+                  Just x
+                    | TyConApp dty tyargs <- idType x -> do
                       nodes' <-
-                        mapM
-                          ( \equation' -> do
-                              node' <- insertNode equation'
-                              insertEdge (identityEdge equation equation') node node'
-                              pure node'
-                          )
-                          equations'
+                        casesOf dty tyargs
+                          >>= mapM
+                            ( \(k, xs) -> do
+                                Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
+                                let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
+                                    equation' =
+                                      substEquation
+                                        subst
+                                        equation
+                                          { equationVars = xs ++ (x `List.delete` equationVars equation)
+                                          }
+                                node' <- insertNode equation'
+                                insertEdge (caseEdge x xs equation equation') node node'
+                                pure node'
+                            )
 
-                      send (putMsg $ text "Cong: " <+> ppr nodes')
-                      markNodeAsComplete node
-                      step
-                  )
-              <|> ( do
-                      equation' <- funExt equation
-                      node' <- insertNode equation'
-                      insertEdge (identityEdge equation equation') node node'
-
-                      send (putMsg $ text "FunExt: " <+> ppr [node'])
-                      markNodeAsComplete node
-                      step
-                  )
-              <|> ( do
-                      -- Select a lemma node
-                      node' <- gets completeProofNodes >>= choose
-                      equation' <- lookupNode node'
-
-                      -- Rewrite current goal
-                      (subst, equation'') <- superpose equation equation'
-                      node'' <- insertNode equation''
-
-                      -- Add edges
-                      insertEdge (identityEdge equation equation'') node node''
-                      insertEdge (substEdge subst equation equation') node node'
-
-                      send (putMsg $ text "Super: " <+> ppr [node', node''])
-                      markNodeAsComplete node
-                  )
-              <|> ( case mx of
-                      Nothing -> empty
-                      Just x
-                        | TyConApp dty tyargs <- idType x -> do
-                          nodes' <-
-                            casesOf dty tyargs
-                              >>= mapM
-                                ( \(k, xs) -> do
-                                    Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
-                                    let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
-                                        equation' =
-                                          substEquation
-                                            subst
-                                            equation
-                                              { equationVars = xs ++ (x `List.delete` equationVars equation)
-                                              }
-                                    node' <- insertNode equation'
-                                    insertEdge (caseEdge x xs equation equation') node node'
-                                    pure node'
-                                )
-
-                          send (putMsg $ text "Case: " <+> ppr nodes')
-                          markNodeAsComplete node
-                        | otherwise -> empty
-                  )
+                      send (putMsg $ text "Case: " <+> ppr nodes')
+                      markNodeAsComplete node Cycleq.Proof.Case
+                    | otherwise -> empty
+              ]
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: (Member (Reader Context) es) => Equation -> Eff es (Either Equation (Maybe Id))

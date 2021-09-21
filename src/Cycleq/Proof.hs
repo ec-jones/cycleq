@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE DerivingStrategies #-}
 
 module Cycleq.Proof where
 
@@ -14,7 +15,6 @@ import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
 import qualified Data.IntMap as IntMap
-import qualified Data.List as List
 import Data.Maybe
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
@@ -37,8 +37,18 @@ alterAdjMap go source target =
 data Proof = Proof
   { proofNodes :: IntMap.IntMap Equation,
     proofEdges :: AdjMap,
-    incompleteNodes :: [Node]
+    proofRules :: IntMap.IntMap (Maybe Rule)
   }
+
+-- | The inference rules.
+data Rule
+  = Refl
+  | Reduce
+  | Cong
+  | Case
+  | FunExt
+  | Super
+  deriving stock Eq
 
 -- | An initial proof with no nodes or edges.
 emptyProof :: Proof
@@ -46,39 +56,43 @@ emptyProof =
   Proof
     { proofNodes = IntMap.empty,
       proofEdges = IntMap.empty,
-      incompleteNodes = []
+      proofRules = IntMap.empty
     }
 
 -- | Insert a equation into a proof and return the new node's index.
 insertNode :: Member (State Proof) es => Equation -> Eff es Node
 insertNode equation = do
-  proof <- get
-  case IntMap.lookupMax (proofNodes proof) of
+  proof@Proof { proofNodes, proofRules } <- get
+  case IntMap.lookupMax proofNodes of
     Nothing -> do
       put
         ( proof
             { proofNodes = IntMap.singleton 0 equation,
-              incompleteNodes = incompleteNodes proof ++ [0]
+              proofRules = IntMap.insert 0 Nothing proofRules
             }
         )
       pure 0
     Just (n, _) -> do
       put
         ( proof
-            { proofNodes = IntMap.insert (n + 1) equation (proofNodes proof),
-              incompleteNodes = incompleteNodes proof ++ [n + 1]
+            { proofNodes = IntMap.insert (n + 1) equation proofNodes,
+              proofRules = IntMap.insert (n + 1) Nothing proofRules
             }
         )
       pure (n + 1)
 
 -- | Mark a node as completed.
-markNodeAsComplete :: Member (State Proof) es => Node -> Eff es ()
-markNodeAsComplete node = modify (\proof -> proof {incompleteNodes = node `List.delete` incompleteNodes proof})
+markNodeAsComplete :: Member (State Proof) es => Node -> Rule -> Eff es ()
+markNodeAsComplete node rule = modify (\proof -> proof {proofRules = IntMap.insert node (Just rule) (proofRules proof)})
 
 -- | The set of complete proof nodes
-completeProofNodes :: Proof -> [Node]
-completeProofNodes Proof {proofNodes, incompleteNodes} =
-  IntMap.keys proofNodes List.\\ incompleteNodes
+caseProofNodes :: Proof -> [Node]
+caseProofNodes Proof {proofRules} =
+  IntMap.keys $ IntMap.filter (== Just Cycleq.Proof.Case) proofRules
+
+incompleteNodes :: Proof -> [Node]
+incompleteNodes Proof {proofRules} =
+  IntMap.keys $ IntMap.filter (== Nothing) proofRules
 
 -- | Get the equation of a given node.
 lookupNode :: Member (State Proof) es => Node -> Eff es Equation
