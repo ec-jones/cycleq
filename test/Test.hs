@@ -6,6 +6,9 @@ import Cycleq
 id :: a -> a
 id x = x
 
+(.) :: (b -> c) -> (a -> b) -> a -> c
+(f . g) x = f (g x)
+
 data List a
   = Nil
   | Cons a (List a)
@@ -24,6 +27,9 @@ add (Succ x) y = Succ (add x y)
 
 main :: Equation
 main = map id ≃ id
+
+-- main :: (b -> c) -> (a -> b) -> Equation
+-- main f g = map (f . g) ≃ map f . map g
 
 -- main :: Nat -> Equation
 -- main x = add x Zero ≃ x

@@ -1,7 +1,18 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
 
-module Cycleq.Edge where
+module Cycleq.Edge
+  ( -- * Edges
+    Edge (..),
+    identityEdge,
+    caseEdge,
+    substEdge,
+    unionEdges,
+    isAsStrongAsEdge,
+    isWellFounded,
+  )
+where
 
 import Control.Applicative
 import Cycleq.Equation
@@ -18,31 +29,40 @@ data Edge = Edge
   }
 
 instance Semigroup Edge where
-  edge1 <> edge2 =
-    Edge
-      { edgeSCGs =
+  Edge {edgeSCGs = scgs1} <> Edge {edgeSCGs = scgs2} =
+    let edgeSCGs =
           Foldable.foldl'
             ( \acc scg1 ->
-                Foldable.foldl' (\acc' scg2 -> insert acc' (scg1 <> scg2)) acc (edgeSCGs edge2)
+                Foldable.foldl' (\acc' scg2 -> insert acc' (scg1 <> scg2)) acc scgs2
             )
             []
-            (edgeSCGs edge1),
+            scgs1
         edgeLabel = Nothing
-      }
+     in Edge {..}
 
 instance Outputable Edge where
-  ppr Edge {edgeSCGs} = ppr edgeSCGs
+  ppr Edge {edgeSCGs, edgeLabel} =
+    text "Edge:"
+-- #ifdef DEBUG
+--       <+> ppr edgeSCGs
+-- #endif
+      <+> ppr edgeLabel
 
 -- | An identity edge where shared variables haven't changed.
 identityEdge :: Equation -> Equation -> Edge
 identityEdge equation1 equation2 =
-  let entries =
-        [ ((i, j), Equal)
-          | (x, i) <- zip (equationVars equation1) [0 ..],
-            (y, j) <- zip (equationVars equation2) [0 ..],
-            x == y
+  let edgeSCGs =
+        [ mkSCG
+            n
+            m
+            [ ((i, j), Equal)
+              | (x, i) <- zip (equationVars equation1) [0 ..],
+                (y, j) <- zip (equationVars equation2) [0 ..],
+                x == y
+            ]
         ]
-   in Edge [mkSCG n m entries] (Just (text ""))
+      edgeLabel = Just (text "")
+   in Edge {..}
   where
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
@@ -50,13 +70,17 @@ identityEdge equation1 equation2 =
 -- | An edge that results from narrowing a variable to a constructor.
 caseEdge :: Var -> [Var] -> Equation -> Equation -> Edge
 caseEdge x ys equation1 equation2 =
-  let entries =
-        [ ((i, j), mkDecrease z y)
-          | (z, i) <- zip (equationVars equation1) [0 ..],
-            (y, j) <- zip (equationVars equation2) [0 ..]
+  let edgeSCGs =
+        [ mkSCG
+            n
+            m
+            [ ((i, j), mkDecrease z y)
+              | (z, i) <- zip (equationVars equation1) [0 ..],
+                (y, j) <- zip (equationVars equation2) [0 ..]
+            ]
         ]
-      label = pprWithCommas (\y -> ppr y <+> text "<" <+> ppr x) ys
-   in Edge [mkSCG n m entries] (Just label)
+      edgeLabel = Just (pprWithCommas (\y -> ppr y <+> text "<" <+> ppr x) ys)
+   in Edge {..}
   where
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
@@ -70,19 +94,25 @@ caseEdge x ys equation1 equation2 =
 -- N.B. The subsitution goes in the other direction from the edge.
 substEdge :: Subst -> Equation -> Equation -> Edge
 substEdge (Subst _ subst _ _) equation1 equation2 =
-  let entries =
-        [ ((i, j), mkDecrease z y)
-          | (z, i) <- zip (equationVars equation1) [0 ..],
-            (y, j) <- zip (equationVars equation2) [0 ..]
+  let edgeSCGs =
+        [ mkSCG
+            n
+            m
+            [ ((i, j), mkDecrease z y)
+              | (z, i) <- zip (equationVars equation1) [0 ..],
+                (y, j) <- zip (equationVars equation2) [0 ..]
+            ]
         ]
-      labels =
-        [ ppr z <+> text "=" <+> ppr y
-          | z <- equationVars equation1,
-            y <- equationVars equation2,
-            Just (Var x) <- pure (lookupVarEnv subst z),
-            x == y
-        ]
-   in Edge [mkSCG n m entries] (Just (interpp'SP labels))
+      edgeLabel =
+        Just $
+          interpp'SP
+            [ ppr z <+> text "=" <+> ppr y
+              | z <- equationVars equation1,
+                y <- equationVars equation2,
+                Just (Var x) <- pure (lookupVarEnv subst z),
+                x == y
+            ]
+   in Edge {..}
   where
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
@@ -96,11 +126,10 @@ substEdge (Subst _ subst _ _) equation1 equation2 =
 -- | Union two sets of size-change graphs.
 -- The first argument's label is used.
 unionEdges :: Edge -> Edge -> Edge
-unionEdges edge1 edge2 =
-  Edge
-    { edgeSCGs = Foldable.foldl' insert (edgeSCGs edge1) (edgeSCGs edge2),
-      edgeLabel = edgeLabel edge1 <|> edgeLabel edge2
-    }
+unionEdges Edge {edgeSCGs = scgs1, edgeLabel = label1} Edge {edgeSCGs = scgs2, edgeLabel = label2} =
+  let edgeSCGs = Foldable.foldl' insert scgs1 scgs2
+      edgeLabel = label1 <|> label1
+   in Edge {..}
 
 -- | Add a size-change graph to a set if it is not subsumed.
 insert :: [SCG] -> SCG -> [SCG]
@@ -161,7 +190,7 @@ isAsStrongAsSCG (SCG graph1) (SCG graph2)
 -- | Check if any diagonal entry is a decrease.
 isSCGWellFounded :: SCG -> Bool
 isSCGWellFounded (SCG graph)
-  | n /= n' = pprPanic "matrix is not square!" (ppr (n, n'))
+  | n /= n' = pprPanic "Matrix is not square!" (ppr (n, n'))
   | otherwise = any (\((i, j), d) -> Decrease == d && i == j) (Array.assocs graph)
   where
     (_, (n, n')) = Array.bounds graph

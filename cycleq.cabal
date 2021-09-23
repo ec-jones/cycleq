@@ -21,10 +21,11 @@ library
 
   build-depends:      base,
                       containers,
+                      mtl,
+                      logict,
+                      ghc,
                       text,
                       process,
-                      freer-simple,
-                      ghc,
                       graphviz
 
   ghc-options:        -Wall
@@ -39,6 +40,9 @@ library
                       -Wunused-packages
 
                       -Wno-unused-matches
+                      -Wno-name-shadowing
+
+                      -- -DDEBUG
 
   default-language:   Haskell2010
 

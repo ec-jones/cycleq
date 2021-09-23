@@ -1,92 +1,104 @@
+{-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE RecordWildCards #-}
 
-module Cycleq.Equation where
+-- |
+-- Module      : Cycleq.Equation
+-- This module defines equations and some basic functions for their manipulation.
+module Cycleq.Equation
+  ( -- * Equations
+    Equation (..),
+    fromCore,
+    substEquation,
+    equationSubtermsForSuper,
+  )
+where
 
-import Data.Bifunctor
-import GHC.Plugins
+import Control.Applicative
+import Data.Foldable
+import GHC.Plugins hiding (empty)
 
--- | A simple equation between core expressions.
+-- | Simple equation between core expressions
 data Equation = Equation
-  { equationVars :: [Id],
+  { -- | Universally quantified variables
+    equationVars :: [Id],
+    -- | Left-hand side of the equation
     equationLeft :: CoreExpr,
-    equationRight :: CoreExpr,
-    -- | Is the equation visibly invalid?
-    equationAbsurd :: Bool
+    -- | Right-hand side of the equation
+    equationRight :: CoreExpr
   }
 
 instance Outputable Equation where
-  ppr Equation {equationVars, equationLeft, equationRight} =
-    -- ppUnless (null equationVars)
-    --  (forAllLit <+> interpp'SP equationVars GHC.Plugins.<> dot)
-    --   <+>
-    ppr (cleanCore True equationLeft) <+> text "≃" <+> ppr (cleanCore True equationRight)
+  ppr Equation {equationVars, equationLeft, equationRight}
+#ifdef DEBUG
+    | not (null equationVars) =
+      forAllLit <+> interpp'SP equationVars GHC.Plugins.<> dot <+> body
+#endif
+    | otherwise = body
+    where
+      body :: SDoc
+      body =
+        -- Suppress type applications
+        updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
+          -- Never qualify names
+          withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
+            ppr equationLeft <+> char '≃' <+> ppr equationRight
 
--- | Apply a substitution to both sides of an equation.
+-- | Interpret a core expression as an equation
+fromCore :: CoreExpr -> Equation
+fromCore srcExpr
+  | let (binders, body) = collectBinders srcExpr
+        equationVars = filter isId binders,
+    (Var eq, [ty, equationLeft, equationRight]) <- collectArgs body,
+    occName eq == mkVarOcc "≃" =
+    Equation {..}
+  | otherwise = pprPanic "Couldn't interpret core expression as equation!" (ppr srcExpr)
+
+-- | Apply a substitution to both sides of an equation
 substEquation :: Subst -> Equation -> Equation
-substEquation subst eq =
+substEquation subst eq@Equation {equationLeft, equationRight} =
   eq
-    { equationLeft = substExpr subst (equationLeft eq),
-      equationRight = substExpr subst (equationRight eq)
+    { equationLeft = substExpr subst equationLeft,
+      equationRight = substExpr subst equationRight
     }
 
--- | Subterms of either side of an equation
-subtermEquation :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
-subtermEquation equation =
-  let lefts = subterms (equationLeft equation)
-      rights = subterms (equationRight equation)
-   in fmap (second (\k expr -> equation {equationLeft = k expr})) lefts
-        ++ fmap (second (\k expr -> equation {equationRight = k expr})) rights
+-- | Choose a subterm of an equation that is suitable for superposition
+equationSubtermsForSuper :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
+equationSubtermsForSuper eq@Equation {equationLeft, equationRight} =
+  ( do
+      ~(expr, k) <- subtermsForSuper equationLeft
+      pure (expr, \expr' -> eq {equationLeft = k expr'})
+  )
+    <|> ( do
+            ~(expr, k) <- subtermsForSuper equationRight
+            pure (expr, \expr' -> eq {equationRight = k expr'})
+        )
 
--- | Subterms of a core expression.
-subterms :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
-subterms (Var x) = [(Var x, id)]
-subterms (Lit lit) = [(Lit lit, id)]
-subterms (App fun arg) =
-  (App fun arg, id) :
-  fmap (second (\k expr -> App (k expr) arg)) (subterms fun)
-    ++ fmap (second (\k -> App fun . k)) (subterms arg)
-subterms (Lam x body) = (Lam x body, id) : fmap (second (\k -> Lam x . k)) (subterms body)
-subterms (Let bind body) = (Let bind body, id) : fmap (second (\k -> Let bind . k)) (subterms body)
-subterms _ = []
-
--- | Interpret a core expression as an equation.
-fromCore :: CoreExpr -> Equation
-fromCore srcExpr =
-  case collectArgs body of
-    (Var op, [ty, lhs, rhs])
-      | occName op == mkVarOcc "≃" ->
-        Equation
-          { equationVars = filter isId xs,
-            equationLeft = lhs,
-            equationRight = rhs,
-            equationAbsurd = False
-          }
-    nonEq -> pprPanic "Couldn't interpret core expression as equation!" (ppr srcExpr)
-  where
-    (xs, body) = collectBinders (cleanCore False srcExpr)
-
--- | Remove any ticks, cast, coercsions or types from a core expression.
-cleanCore :: Bool -> CoreExpr -> CoreExpr
-cleanCore p (Var x) = Var x
-cleanCore p (Lit lit) = Lit lit
-cleanCore p (App fun arg)
-  | isValArg arg || not p = App (cleanCore p fun) (cleanCore p arg)
-  | otherwise = cleanCore p fun
-cleanCore p (Lam x body)
-  | isId x || not p = Lam x (cleanCore p body)
-  | otherwise = cleanCore p body
-cleanCore p (Let bind body) = Let (cleanBind p bind) (cleanCore p body)
-cleanCore p (Case scrut x ty cases) = Case (cleanCore p scrut) x ty (map (cleanAlt p) cases)
-cleanCore p (Cast expr _) = cleanCore p expr
-cleanCore p (Tick _ expr) = cleanCore p expr
-cleanCore p (Type ty) = Type ty
-cleanCore p srcExpr = pprPanic "Couldn't clean core expression!" (ppr srcExpr)
-
--- | Clean every expression in a program.
-cleanBind :: Bool -> CoreBind -> CoreBind
-cleanBind p (NonRec x defn) = NonRec x (cleanCore p defn)
-cleanBind p (Rec defns) = Rec (map (second $ cleanCore p) defns)
-
--- | Clean case alternative.
-cleanAlt :: Bool -> CoreAlt -> CoreAlt
-cleanAlt p (ac, xs, rhs) = (ac, xs, cleanCore p rhs)
+-- | Choose a subterm that is suitable for superposition
+subtermsForSuper :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
+subtermsForSuper (App fun arg) =
+  asum
+    [ pure (App fun arg, id),
+      do
+        ~(expr, k) <- subtermsForSuper fun
+        pure (expr, flip App arg . k),
+      do
+        ~(expr, k) <- subtermsForSuper arg
+        pure (expr, App fun . k)
+    ]
+subtermsForSuper (Lam x body) =
+  asum
+    [ pure (Lam x body, id),
+      do
+        ~(expr, k) <- subtermsForSuper body
+        pure (expr, Lam x . k)
+    ]
+subtermsForSuper (Let bind body) =
+  asum
+    [ pure (Let bind body, id),
+      do
+        ~(expr, k) <- subtermsForSuper body
+        pure (expr, Let bind . k)
+    ]
+subtermsForSuper _ = empty

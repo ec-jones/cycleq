@@ -5,8 +5,8 @@ module Cycleq
   )
 where
 
-import Control.Monad.Freer
-import Control.Monad.Freer.Reader
+import Data.Bifunctor
+import Control.Monad.Reader
 import Cycleq.Prover
 import Cycleq.Equation
 import Data.Maybe
@@ -32,15 +32,45 @@ plugin =
       CoreDoPluginPass
         "Cycleq"
         ( \mguts -> do
+            let prog = map cleanBind (mg_binds mguts)
             case [ defn
-                   | (x, defn) <- flattenBinds (mg_binds mguts),
+                   | (x, defn) <- flattenBinds prog,
                      getOccName (getName x) == mkVarOcc "main"
                  ] of
               [] -> pure ()
               (main : _) -> do
-                let equation = fromCore main
-                    context = mkContext (cleanBind False <$> mg_binds mguts)
-                proof <- fromJust <$> runM (runReader context (prover equation))
+                let goal = fromCore main
+                    context = mkProgramEnv prog
+                proof <- fromJust <$> runReaderT (prover [] goal) context
                 drawProof proof "proof.svg"
             pure mguts
         )
+
+-- | Clean up core expressions.
+cleanCore :: CoreExpr -> CoreExpr
+cleanCore (Var x) = Var x
+cleanCore (Lit lit) = Lit lit
+cleanCore expr@(App _ _) =
+  case collectArgs expr of
+    (Let _ _, args)
+      | not (null args) -> 
+        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr) 
+    (Case {}, args) 
+      | not (null args) -> 
+        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr) 
+    (fun, args) -> mkApps (cleanCore fun) (map cleanCore args)
+cleanCore (Lam x body) = Lam x (cleanCore body)
+cleanCore (Let bind body) = Let (cleanBind bind) (cleanCore body)
+cleanCore (Case scrut x ty cases) = Case (cleanCore scrut) x ty (map cleanAlt cases)
+cleanCore (Tick _ expr) = cleanCore expr
+cleanCore (Type ty) = Type ty
+cleanCore expr = pprSorry "Casts and coercions are not yet supported!" (ppr expr)
+
+-- | Clean up core binds.
+cleanBind :: CoreBind -> CoreBind
+cleanBind (NonRec x defn) = NonRec x (cleanCore defn)
+cleanBind (Rec defns) = Rec (map (second cleanCore) defns)
+
+-- | Clean up case alternative.
+cleanAlt :: CoreAlt -> CoreAlt
+cleanAlt (ac, xs, rhs) = (ac, xs, cleanCore rhs)
