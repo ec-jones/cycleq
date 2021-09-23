@@ -1,13 +1,10 @@
 module Test where
 
+import Prelude ()
 import Cycleq
 
 id :: a -> a
 id x = x
-
-data Nat
-  = Zero
-  | Succ Nat
 
 data List a
   = Nil
@@ -17,24 +14,22 @@ map :: (a -> b) -> List a -> List b
 map f Nil = Nil
 map f (Cons x xs) = Cons (f x) (map f xs)
 
-reverse :: List a -> List a
-reverse Nil = Nil
-reverse (Cons x xs) = snoc x (reverse xs)
+data Nat
+  = Zero
+  | Succ Nat
 
-snoc :: a -> List a -> List a
-snoc x Nil = Cons x Nil
-snoc x (Cons y ys) = Cons y (snoc x ys)
+add :: Nat -> Nat -> Nat
+add Zero     y = y
+add (Succ x) y = Succ (add x y)
 
-take :: Nat -> List a -> List a
-take Zero _ = Nil
-take (Succ n) Nil = Nil
-take (Succ n) (Cons x xs) = Cons x (take n xs)
+main :: Equation
+main = map id ≃ id
 
-commands :: [Command]
-commands =
-  [ normaliseTerm (\y ys zs -> [zs ≃ Cons y ys] ⊢ map id zs),
-    criticalTerms (\n xs -> [] ⊢ take (Succ n) (reverse xs)),
-    simplifyEquation (\y ys zs -> [zs ≃ Cons y ys] ⊢ map id zs ≃ Cons y ys),
-    simplifyEquation (\y ys -> [] ⊢ Nil ≃ Cons y ys),
-    simplifySequent (\y ys zs -> [Cons y ys ≃ map id zs] ⊢ Cons y ys ≃ zs)
-  ]
+-- main :: Nat -> Equation
+-- main x = add x Zero ≃ x
+
+-- main :: Nat -> Nat -> Equation
+-- main x y = add x y ≃ add y x
+
+-- main :: Nat -> Nat -> Nat -> Equation
+-- main x y z = add x (add y z) ≃ add (add x y) z
