@@ -15,6 +15,7 @@ import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
 import qualified Data.IntMap as IntMap
+import qualified Data.List as List
 import Data.Maybe
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
@@ -37,38 +38,32 @@ alterAdjMap go source target =
 data Proof = Proof
   { proofNodes :: IntMap.IntMap Equation,
     proofEdges :: AdjMap,
-    proofRules :: IntMap.IntMap (Maybe Rule)
+    -- | Nodes without a proof
+    proofIncompleteNodes :: [Node],
+    -- | Nodes suitable for superposition
+    proofLemmas :: [Node]
   }
 
--- | The inference rules.
-data Rule
-  = Refl
-  | Reduce
-  | Cong
-  | Case
-  | FunExt
-  | Super
-  deriving stock Eq
-
--- | An initial proof with no nodes or edges.
-emptyProof :: Proof
-emptyProof =
+-- | An initial proof with a set of lemmas and no edges.
+emptyProof :: [Equation] -> Proof
+emptyProof lemmas =
   Proof
-    { proofNodes = IntMap.empty,
+    { proofNodes = IntMap.fromList (zip [0 ..] lemmas),
       proofEdges = IntMap.empty,
-      proofRules = IntMap.empty
+      proofIncompleteNodes = [],
+      proofLemmas = [0 .. length lemmas - 1]
     }
 
 -- | Insert a equation into a proof and return the new node's index.
 insertNode :: Member (State Proof) es => Equation -> Eff es Node
 insertNode equation = do
-  proof@Proof { proofNodes, proofRules } <- get
+  proof@Proof {proofNodes, proofIncompleteNodes} <- get
   case IntMap.lookupMax proofNodes of
     Nothing -> do
       put
         ( proof
             { proofNodes = IntMap.singleton 0 equation,
-              proofRules = IntMap.insert 0 Nothing proofRules
+              proofIncompleteNodes = List.insert 0 proofIncompleteNodes
             }
         )
       pure 0
@@ -76,23 +71,22 @@ insertNode equation = do
       put
         ( proof
             { proofNodes = IntMap.insert (n + 1) equation proofNodes,
-              proofRules = IntMap.insert (n + 1) Nothing proofRules
+              proofIncompleteNodes = List.insert  (n + 1) proofIncompleteNodes
             }
         )
       pure (n + 1)
 
--- | Mark a node as completed.
-markNodeAsComplete :: Member (State Proof) es => Node -> Rule -> Eff es ()
-markNodeAsComplete node rule = modify (\proof -> proof {proofRules = IntMap.insert node (Just rule) (proofRules proof)})
+-- | Mark a node as complete.
+markNodeAsComplete :: Member (State Proof) es => Node -> Eff es ()
+markNodeAsComplete node = modify $
+  \proof@Proof {proofIncompleteNodes} ->
+    proof {proofIncompleteNodes = List.delete node proofIncompleteNodes}
 
--- | The set of complete proof nodes
-caseProofNodes :: Proof -> [Node]
-caseProofNodes Proof {proofRules} =
-  IntMap.keys $ IntMap.filter (== Just Cycleq.Proof.Case) proofRules
-
-incompleteNodes :: Proof -> [Node]
-incompleteNodes Proof {proofRules} =
-  IntMap.keys $ IntMap.filter (== Nothing) proofRules
+-- | Mark a node as suitable for superposition.
+markNodeAsSuper :: Member (State Proof) es => Node -> Eff es ()
+markNodeAsSuper node = modify $
+  \proof@Proof {proofLemmas} ->
+    proof {proofLemmas = List.insert node proofLemmas}
 
 -- | Get the equation of a given node.
 lookupNode :: Member (State Proof) es => Node -> Eff es Equation

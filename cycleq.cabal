@@ -11,7 +11,8 @@ category:             Math
 library
   exposed-modules:    Cycleq
 
-  other-modules:      Cycleq.Equation,
+  other-modules:      Cycleq.Patterns,
+                      Cycleq.Equation,
                       Cycleq.Reduction,
                       Cycleq.Edge,
                       Cycleq.Proof,
@@ -21,6 +22,7 @@ library
 
   build-depends:      base,
                       containers,
+                      mtl,
                       text,
                       process,
                       freer-simple,

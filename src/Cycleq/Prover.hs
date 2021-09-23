@@ -11,6 +11,7 @@
 
 module Cycleq.Prover where
 
+import Cycleq.Patterns
 import Control.Applicative
 import Control.Monad
 import Control.Monad.Freer
@@ -33,7 +34,7 @@ prover ::
   Equation ->
   Eff es (Maybe Proof)
 prover equation = do
-  proof <- execState emptyProof (insertNode equation)
+  proof <- execState (emptyProof []) (insertNode equation)
   go [(10, proof)]
   where
     go [] = pure Nothing
@@ -41,7 +42,7 @@ prover equation = do
       | fuel <= 0 = go proofs
       | otherwise = do
         proofs' <- makeChoiceA (execState proof step)
-        case List.find (null . incompleteNodes) proofs' of
+        case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
@@ -54,14 +55,11 @@ step ::
   ) =>
   Eff es ()
 step = do
-  nodes <- gets incompleteNodes
+  nodes <- gets proofIncompleteNodes
   case nodes of
     [] -> pure ()
     (node : _) -> do
       equation <- lookupNode node
-      when
-        (equationAbsurd equation)
-        empty
       send $ putMsg (ppr node GHC.Plugins.<> text ":" <+> ppr equation)
       local
         (extendContextFreeVars (equationVars equation))
@@ -72,7 +70,7 @@ step = do
             insertEdge (identityEdge equation equation') node node'
 
             send (putMsg $ text "Reduct: " <+> ppr [node'])
-            markNodeAsComplete node Reduce
+            markNodeAsComplete node
             step
           Right mx ->
             msum
@@ -83,7 +81,7 @@ step = do
                     (refl equation)
 
                   send (putMsg $ text "Refl: []")
-                  markNodeAsComplete node Cycleq.Proof.Refl
+                  markNodeAsComplete node
                   step,
                 -- Cong
                 do
@@ -98,7 +96,7 @@ step = do
                       equations'
 
                   send (putMsg $ text "Cong: " <+> ppr nodes')
-                  markNodeAsComplete node Cong
+                  markNodeAsComplete node
                   step,
                 -- FunExt
                 do
@@ -107,12 +105,12 @@ step = do
                   insertEdge (identityEdge equation equation') node node'
 
                   send (putMsg $ text "FunExt: " <+> ppr [node'])
-                  markNodeAsComplete node FunExt
+                  markNodeAsComplete node
                   step,
                 -- Super
                 do
                   -- Select a lemma node
-                  node' <- gets caseProofNodes >>= choose
+                  node' <- gets proofLemmas >>= choose
                   equation' <- lookupNode node'
 
                   -- Rewrite current goal
@@ -124,7 +122,7 @@ step = do
                   insertEdge (substEdge subst equation equation') node node'
 
                   send (putMsg $ text "Super: " <+> ppr [node', node''])
-                  markNodeAsComplete node Super,
+                  markNodeAsComplete node,
                 -- Case
                 case mx of
                   Nothing -> empty
@@ -148,7 +146,8 @@ step = do
                             )
 
                       send (putMsg $ text "Case: " <+> ppr nodes')
-                      markNodeAsComplete node Cycleq.Proof.Case
+                      markNodeAsComplete node
+                      markNodeAsSuper node
                     | otherwise -> empty
               ]
 
@@ -172,10 +171,8 @@ refl Equation {equationLeft, equationRight} = do
 consCong :: Member NonDet es => Equation -> Eff es [Equation]
 consCong eq@Equation {equationLeft = ConApp con (filter isValArg -> args), equationRight = ConApp con' (filter isValArg -> args')}
   | con == con' = pure (zipWith (\arg arg' -> eq {equationLeft = arg, equationRight = arg'}) args args')
-  | otherwise = pure [eq {equationAbsurd = True}]
 consCong eq@Equation {equationLeft = Lit' lit, equationRight = Lit' lit'}
   | lit == lit' = pure []
-  | otherwise = pure [eq {equationAbsurd = True}]
 consCong _ = empty
 
 -- | Create a fresh variable as an argument to both sides.
@@ -188,8 +185,7 @@ funExt Equation {equationVars, equationLeft, equationRight} = do
     Equation
     { equationVars = x : equationVars,
       equationLeft = App equationLeft (Var x),
-      equationRight = App equationRight (Var x),
-      equationAbsurd = False
+      equationRight = App equationRight (Var x)
     }
 
 -- | Generate a fresh instance for each possible constructor.
@@ -208,8 +204,7 @@ freshVar ty = do
 superpose :: (Member (Reader Context) es, Member NonDet es, Member CoreM es) => Equation -> Equation -> Eff es (Subst, Equation)
 superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
   Context {contextInScopeSet} <- asks (extendContextFreeVars equationVars)
-  (expr, ctx) <- choose (subtermEquation goal)
-  guard (isNonVar expr)
+  (expr, ctx) <- choose (equationSubtermsForSuper goal)
   ( do
       guard (isNonVar equationLeft)
       subst <- match equationVars contextInScopeSet equationLeft expr
