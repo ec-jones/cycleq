@@ -40,9 +40,8 @@ plugin =
                  ] of
               [] -> pure ()
               (main : _) -> do
-                let equation = fromCore main
-                    context = mkContext prog
-                proof <- fromJust <$> runM (runReader context (prover equation))
+                let equation = fromJust $ fromCore main
+                proof <- fromJust <$> runM (runReader prog (prover equation))
                 drawProof proof "proof.svg"
             pure mguts
         )

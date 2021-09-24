@@ -5,12 +5,10 @@ module Cycleq.Equation
   ( -- * Equations
     Equation (..),
     fromCore,
-    substEquation,
-    equationSubtermsForSuper,
+    subtermsForSuper,
   )
 where
 
-import Cycleq.Patterns
 import Data.Bifunctor
 import GHC.Plugins hiding (empty)
 
@@ -27,7 +25,7 @@ data Equation = Equation
 instance Outputable Equation where
   ppr (Equation xs lhs rhs)
     | not (null xs) =
-      forAllLit <+> interpp'SP xs GHC.Plugins.<> dot <+> body
+      char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> body
     | otherwise = body
     where
       body :: SDoc
@@ -39,36 +37,34 @@ instance Outputable Equation where
             ppr lhs <+> char '≃' <+> ppr rhs
 
 -- | Interpret a core expression as an equation
-fromCore :: CoreExpr -> Equation
-fromCore (Lams xs (Apps (Var eq) [ty, lhs, rhs]))
-  | occName eq == mkVarOcc "≃" = Equation xs lhs rhs
-fromCore expr = pprPanic "Couldn't parse equation!" (ppr expr)
+fromCore :: CoreExpr -> Maybe Equation
+fromCore expr
+  | let (xs, body) = collectBinders expr,
+    (Var eq, [ty, lhs, rhs]) <- collectArgs body,
+    occName eq == mkVarOcc "≃" =
+    Just (Equation (filter isId xs) lhs rhs)
+  | otherwise = Nothing
 
--- | Apply a substitution to both sides of an equation.
-substEquation :: Subst -> Equation -> Equation
-substEquation subst (Equation xs lhs rhs) =
-  Equation xs (substExpr subst lhs) (substExpr subst rhs)
-
--- | Choose a subterm of an equation that is suitable for superposition.
-equationSubtermsForSuper :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
-equationSubtermsForSuper (Equation xs lhs rhs) = lefts ++ rights
+-- | The non-variable subterms of an equation.
+subtermsForSuper :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
+subtermsForSuper (Equation xs lhs rhs) = lefts ++ rights
   where
     lefts, rights :: [(CoreExpr, CoreExpr -> Equation)]
     lefts =
-      second (flip (Equation xs) rhs .) <$> subtermsForSuper lhs
+      second (flip (Equation xs) rhs .) <$> exprSubtermsForSuper lhs
     rights =
-      second (Equation xs lhs .) <$> subtermsForSuper rhs
+      second (Equation xs lhs .) <$> exprSubtermsForSuper rhs
 
--- | Choose a subterm that is suitable for superposition.
-subtermsForSuper :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
-subtermsForSuper (App fun arg) =
+-- | The non-variable subterms of an expression.
+exprSubtermsForSuper :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
+exprSubtermsForSuper (App fun arg) =
   (App fun arg, id) :
-  (second (App fun .) <$> subtermsForSuper arg)
-    ++ (second (flip App arg .) <$> subtermsForSuper fun)
-subtermsForSuper (Lam x body) =
+  (second (App fun .) <$> exprSubtermsForSuper arg)
+    ++ (second (flip App arg .) <$> exprSubtermsForSuper fun)
+exprSubtermsForSuper (Lam x body) =
   (Lam x body, id) :
-  (second (Lam x .) <$> subtermsForSuper body)
-subtermsForSuper (Let bind body) =
+  (second (Lam x .) <$> exprSubtermsForSuper body)
+exprSubtermsForSuper (Let bind body) =
   (Let bind body, id) :
-  (second (Let bind .) <$> subtermsForSuper body)
-subtermsForSuper _ = []
+  (second (Let bind .) <$> exprSubtermsForSuper body)
+exprSubtermsForSuper _ = []

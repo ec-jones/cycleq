@@ -1,125 +1,138 @@
-{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MonoLocalBinds #-}
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
-{-# LANGUAGE ViewPatterns #-}
 
-module Cycleq.Reduction where
+-- |
+-- Module      : Cycleq.Reduction
+-- This module defines variable environments and the reduction of core expression.
+module Cycleq.Reduction
+  ( -- * Reduction Environment
+    ReductionEnv (..),
+    mkReductionEnv,
 
-import Cycleq.Patterns
+    -- * Reduction
+    Reduct (..),
+    reduce,
+  )
+where
+
 import Control.Applicative
-import Control.Monad.Freer
-import Control.Monad.Freer.NonDet
-import Control.Monad.Freer.Reader
-import Control.Monad.Freer.State
+import Control.Monad.Reader
+import Control.Monad.Writer
+import GHC.Data.Maybe
 import GHC.Plugins hiding (empty)
 
--- * Reduction Context
+-- * Reduction Environment
 
--- | A reduction context.
-data Context = Context
-  { contextFreeVars :: IdSet,
-    contextBoundVars :: IdEnv CoreExpr,
-    contextInScopeSet :: InScopeSet
+-- | The variable environment for reduction.
+data ReductionEnv = ReductionEnv
+  { reductionFreeVars :: IdSet,
+    reductionBoundVars :: IdEnv CoreExpr,
+    reductionInScopeSet :: InScopeSet
   }
 
--- | Make a context from a program and list of free variables.
-mkContext :: [CoreBind] -> Context
-mkContext binds =
-  Context
-    { contextFreeVars = emptyVarSet,
-      contextBoundVars = mkVarEnv (flattenBinds binds),
-      contextInScopeSet = mkInScopeSet (mkVarSet (bindersOfBinds binds))
+-- | Make a program environment from a program.
+mkReductionEnv :: [Id] -> CoreProgram -> ReductionEnv
+mkReductionEnv xs binds =
+  ReductionEnv
+    { reductionFreeVars = mkVarSet xs,
+      reductionBoundVars = mkVarEnv (flattenBinds binds),
+      reductionInScopeSet = mkInScopeSet (mkVarSet (xs ++ bindersOfBinds binds))
     }
 
--- | Extend a context with a binder.
-extendContextBind :: CoreBind -> Context -> Context
-extendContextBind bind ctx@Context {contextBoundVars, contextInScopeSet} =
-  ctx
-    { contextBoundVars = extendVarEnvList contextBoundVars (flattenBinds [bind]),
-      contextInScopeSet = extendInScopeSetList contextInScopeSet (bindersOf bind)
-    }
-
--- | Extend a context with free variables.
-extendContextFreeVars :: [Id] -> Context -> Context
-extendContextFreeVars xs ctx@Context {contextFreeVars, contextInScopeSet} =
-  ctx
-    { contextFreeVars = extendVarSetList contextFreeVars xs,
-      contextInScopeSet = extendInScopeSetList contextInScopeSet xs
+-- | Extend an environment with a local binder.
+bindReductionEnv :: CoreBind -> ReductionEnv -> ReductionEnv
+bindReductionEnv bind env =
+  env
+    { reductionBoundVars = extendVarEnvList (reductionBoundVars env) (flattenBinds [bind]),
+      reductionInScopeSet = extendInScopeSetList (reductionInScopeSet env) (bindersOf bind)
     }
 
 -- * Reduction
 
--- | A reduced core expression
+-- | A reduced core expression.
 data Reduct = Reduct
   { reductExpr :: CoreExpr,
     reductIsProper :: Bool,
-    reductStuck :: Maybe Id
+    reductStuckOn :: Maybe Id
   }
 
--- | Make a 'Reduct' from the final state of reduction.
-mkReduct :: CoreExpr -> (Maybe (CoreExpr, Bool), Maybe Id) -> Reduct
-mkReduct expr (Nothing, stuck) =
-  Reduct
-    { reductExpr = expr,
-      reductIsProper = False,
-      reductStuck = stuck
-    }
-mkReduct _ (Just (expr, p), stuck) =
-  Reduct
-    { reductExpr = expr,
-      reductIsProper = p,
-      reductStuck = stuck
-    }
-
--- | Reduce a core expression as much as possible.
-reduce :: forall es. (Member (Reader Context) es) => CoreExpr -> Eff es Reduct
-reduce expr = mkReduct expr <$> runState Nothing (makeChoiceA $ runState False (go expr []))
+-- | Reduce a core expression as far as possible.
+reduce :: forall m. MonadReader ReductionEnv m => CoreExpr -> m Reduct
+reduce expr = handler (go False expr [])
   where
-    -- Reduce a core expression under a number of arguments.
-    go :: CoreExpr -> [CoreArg] -> Eff (State Bool ': NonDet ': State (Maybe Id) ': es) CoreExpr
-    go (Var x) args = do
-      Context {contextBoundVars, contextFreeVars} <- ask
-      case lookupVarEnv contextBoundVars x of
+    handler :: MaybeT (WriterT (First Id) m) CoreExpr -> m Reduct
+    handler m = do
+      (expr', First x) <- runWriterT (runMaybeT m)
+      pure
+        Reduct
+          { reductExpr = fromMaybe expr expr',
+            reductIsProper = isJust expr',
+            reductStuckOn = x
+          }
+
+    -- Reduce a core expression under a series of arguments.
+    -- Non-proper reducts are permited if @notProper@ is set.
+    go :: Bool -> CoreExpr -> [CoreArg] -> MaybeT (WriterT (First Id) m) CoreExpr
+    go notProper (Var x) args = do
+      ReductionEnv
+        { reductionFreeVars = fvs,
+          reductionBoundVars = bvs
+        } <-
+        ask
+      case lookupVarEnv bvs x of
         Nothing
-          | isDataConWorkId x ->
+          | isDataConWorkId x -> do
+            guard notProper
             pure (mkApps (Var x) args)
-          | elemVarSet x contextFreeVars -> do
-            put (Just x) -- Mark @x@ as a needed variable
+          | elemVarSet x fvs -> do
+            guard notProper
+            tell (First (Just x)) -- Mark x as preventing reduction
             pure (mkApps (Var x) args)
           | otherwise -> pprPanic "Variable not in scope!" (ppr x)
         Just defn ->
-          ( do
-              put True -- Mark a reduction step
-              go defn args
-          )
-            <|> pure (mkApps (Var x) args)
-    go (Lit lit) [] = pure (Lit lit)
-    go (App fun arg) args = go fun (arg : args)
-    go (Lam x body) [] = empty
-    go (Lam x body) (arg : args) = do
-      Context {contextInScopeSet} <- ask
-      let subst = mkOpenSubst contextInScopeSet [(x, arg)]
-      put True
-      go (substExpr subst body) args
-    go (Let bind body) [] =
-      Let bind <$> local (extendContextBind bind) (go body [])
-    go (Case scrut x ty alts) [] = do
-      Context {contextInScopeSet} <- ask
-      scrut' <- go scrut []
-      case scrut' of
-        ConApp con args
+          go True defn args
+            <|> ( do
+                    guard notProper
+                    pure (mkApps (Var x) args)
+                )
+    go notProper (Lit lit) args = pure (mkApps (Lit lit) args)
+    go notProper (App fun arg) args = go notProper fun (arg : args)
+    go notProper (Lam x body) [] = empty
+    go notProper (Lam x body) (arg : args) = do
+      scope <- asks reductionInScopeSet
+      let subst = mkOpenSubst scope [(x, arg)]
+      go True (substExpr subst body) args
+    go notProper (Let bind body) [] =
+      Let bind <$> local (bindReductionEnv bind) (go notProper body [])
+    go notProper (Case scrut x ty alts) [] = do
+      scrut' <- go True scrut []
+      case viewNormalForm scrut' of
+        Just (Left (con, args))
           | Just (_, patVars, rhs) <- findAlt (DataAlt con) alts -> do
-            let subst = mkOpenSubst contextInScopeSet ((x, scrut') : zip patVars (filter isValArg args))
-            put True
-            go (substExpr subst rhs) []
-        Lit' lit
+            scope <- asks reductionInScopeSet
+            let subst = mkOpenSubst scope ((x, scrut') : zip patVars args)
+            go True (substExpr subst rhs) []
+          | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
+        Just (Right lit)
           | Just (_, [], rhs) <- findAlt (LitAlt lit) alts -> do
-            put True
-            go rhs []
-        nonCon -> empty
-    go (Type ty) args = pure (mkApps (Type ty) args)
-    go expr' args = pprPanic "Could not reduce expression!" (ppr (mkApps expr' args))
+            go True rhs []
+          | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
+        Nothing -> empty
+    go notProper expr' args =
+      pprPanic "Unsupproted expression!" (ppr (mkApps expr' args))
+
+-- | Match a core expression against a first-order normal form.
+viewNormalForm :: CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)
+viewNormalForm = go [] []
+  where
+    go :: [CoreBind] -> [CoreArg] -> CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)
+    go binds args (Var x) =
+      case isDataConWorkId_maybe x of
+        Just con -> Just $ Left (con, fmap (\arg -> foldr Let arg binds) args)
+        Nothing -> Nothing
+    go binds args (Lit lit) = Just $ Right lit
+    go binds args (App fun arg)
+      | isValArg arg = go binds (arg : args) fun
+      | otherwise = go binds args fun
+    go binds [] (Let bind body) = go (bind : binds) [] body
+    go _ _ _ = Nothing

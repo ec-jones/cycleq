@@ -17,6 +17,7 @@ import Control.Monad
 import Control.Monad.Freer
 import Control.Monad.Freer.NonDet
 import Control.Monad.Freer.Reader
+import Control.Monad.Reader (runReaderT)
 import Control.Monad.Freer.State
 import Cycleq.Edge
 import Cycleq.Equation
@@ -29,7 +30,7 @@ import GHC.Plugins hiding (empty)
 -- | Breadth-first search for a proof.
 prover ::
   ( Member CoreM es,
-    Member (Reader Context) es
+    Member (Reader CoreProgram) es
   ) =>
   Equation ->
   Eff es (Maybe Proof)
@@ -49,7 +50,7 @@ prover equation = do
 -- | Expand a partial proof tree.
 step ::
   ( Member CoreM es,
-    Member (Reader Context) es,
+    Member (Reader CoreProgram) es,
     Member NonDet es,
     Member (State Proof) es
   ) =>
@@ -61,9 +62,7 @@ step = do
     (node : _) -> do
       equation <- lookupNode node
       send $ putMsg (ppr node GHC.Plugins.<> text ":" <+> ppr equation)
-      local
-        (extendContextFreeVars (equationVars equation))
-        (reduceEquation equation)
+      reduceEquation equation
         >>= \case
           Left equation' -> do
             node' <- insertNode equation'
@@ -76,9 +75,7 @@ step = do
             msum
               [ -- Refl
                 do
-                  local
-                    (extendContextFreeVars (equationVars equation))
-                    (refl equation)
+                  refl equation
 
                   send (putMsg $ text "Refl: []")
                   markNodeAsComplete node
@@ -132,13 +129,13 @@ step = do
                         casesOf dty tyargs
                           >>= mapM
                             ( \(k, xs) -> do
-                                Context {contextInScopeSet} <- asks (extendContextFreeVars (equationVars equation))
-                                let subst = mkOpenSubst contextInScopeSet [(x, mkConApp2 k tyargs xs)]
+                                ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
+                                let subst = mkOpenSubst reductionInScopeSet [(x, mkConApp2 k tyargs xs)]
                                     equation' =
-                                      substEquation
-                                        subst
                                         equation
-                                          { equationVars = xs ++ (x `List.delete` equationVars equation)
+                                          { equationVars = xs ++ (x `List.delete` equationVars equation),
+                                            equationLeft = substExpr subst (equationLeft equation),
+                                            equationRight = substExpr subst (equationRight equation)
                                           }
                                 node' <- insertNode equation'
                                 insertEdge (caseEdge x xs equation equation') node node'
@@ -152,20 +149,21 @@ step = do
               ]
 
 -- | Try to reduce either side of an equation.
-reduceEquation :: (Member (Reader Context) es) => Equation -> Eff es (Either Equation (Maybe Id))
-reduceEquation eq@Equation {equationLeft, equationRight} = do
-  lhs <- reduce equationLeft
-  rhs <- reduce equationRight
+reduceEquation :: (Member (Reader CoreProgram) es) => Equation -> Eff es (Either Equation (Maybe Id))
+reduceEquation eq@Equation {equationVars, equationLeft, equationRight} = do
+  prog <- ask
+  lhs <- runReaderT (reduce equationLeft) (mkReductionEnv equationVars prog)
+  rhs <- runReaderT (reduce equationRight) (mkReductionEnv equationVars prog)
   pure $
     if reductIsProper lhs || reductIsProper rhs
       then Left (eq {equationLeft = reductExpr lhs, equationRight = reductExpr rhs})
-      else Right (reductStuck lhs <|> reductStuck rhs)
+      else Right (reductStuckOn lhs <|> reductStuckOn rhs)
 
 -- | Reflexivity
-refl :: (Member (Reader Context) es, Member NonDet es) => Equation -> Eff es ()
-refl Equation {equationLeft, equationRight} = do
-  Context {contextInScopeSet} <- ask
-  guard (eqExpr contextInScopeSet equationLeft equationRight)
+refl :: (Member (Reader CoreProgram) es, Member NonDet es) => Equation -> Eff es ()
+refl Equation {equationVars, equationLeft, equationRight} = do
+  ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv equationVars)
+  guard (eqExpr reductionInScopeSet equationLeft equationRight)
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
 consCong :: Member NonDet es => Equation -> Eff es [Equation]
@@ -201,18 +199,18 @@ freshVar ty = do
   pure (mkLocalId name Many ty)
 
 -- | Rewrite the first equation with an instance of the second.
-superpose :: (Member (Reader Context) es, Member NonDet es, Member CoreM es) => Equation -> Equation -> Eff es (Subst, Equation)
+superpose :: (Member (Reader CoreProgram) es, Member NonDet es, Member CoreM es) => Equation -> Equation -> Eff es (Subst, Equation)
 superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
-  Context {contextInScopeSet} <- asks (extendContextFreeVars equationVars)
-  (expr, ctx) <- choose (equationSubtermsForSuper goal)
+  ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv equationVars)
+  (expr, ctx) <- choose (subtermsForSuper goal)
   ( do
       guard (isNonVar equationLeft)
-      subst <- match equationVars contextInScopeSet equationLeft expr
+      subst <- match equationVars reductionInScopeSet equationLeft expr
       pure (subst, ctx (substExpr subst equationRight))
     )
     <|> ( do
             guard (isNonVar equationRight)
-            subst <- match equationVars contextInScopeSet equationRight expr
+            subst <- match equationVars reductionInScopeSet equationRight expr
             pure (subst, ctx (substExpr subst equationLeft))
         )
   where
