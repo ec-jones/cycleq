@@ -5,12 +5,11 @@ module Cycleq
   )
 where
 
-import Control.Monad.Freer
-import Control.Monad.Freer.Reader
 import Cycleq.Prover
 import Cycleq.Equation
 import Data.Maybe
 import Cycleq.Proof
+import Control.Monad.Reader
 import Data.Bifunctor
 import Cycleq.Reduction
 import GHC.Plugins hiding (empty)
@@ -41,7 +40,7 @@ plugin =
               [] -> pure ()
               (main : _) -> do
                 let equation = fromJust $ fromCore main
-                proof <- fromJust <$> runM (runReader prog (prover equation))
+                proof <- fromJust <$> runReaderT (prover equation) (mkProgramEnv prog)
                 drawProof proof "proof.svg"
             pure mguts
         )

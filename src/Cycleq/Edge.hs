@@ -1,7 +1,18 @@
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
-module Cycleq.Edge where
+-- |
+-- Module      : Cycleq.Edge
+module Cycleq.Edge
+  ( -- * Edges
+    Edge (..),
+    identityEdge,
+    caseEdge,
+    substEdge,
+    unionEdges,
+    isAsStrongAsEdge,
+    isWellFounded,
+  )
+where
 
 import Control.Applicative
 import Cycleq.Equation
@@ -18,20 +29,20 @@ data Edge = Edge
   }
 
 instance Semigroup Edge where
-  edge1 <> edge2 =
+  Edge {edgeSCGs = scgs1} <> Edge {edgeSCGs = scgs2} =
     Edge
       { edgeSCGs =
           Foldable.foldl'
             ( \acc scg1 ->
-                Foldable.foldl' (\acc' scg2 -> insert acc' (scg1 <> scg2)) acc (edgeSCGs edge2)
+                Foldable.foldl' (\acc' scg2 -> insert acc' (scg1 <> scg2)) acc scgs2
             )
             []
-            (edgeSCGs edge1),
+            scgs1,
         edgeLabel = Nothing
       }
 
 instance Outputable Edge where
-  ppr Edge {edgeSCGs} = ppr edgeSCGs
+  ppr Edge { edgeLabel = label } = ppr label
 
 -- | An identity edge where shared variables haven't changed.
 identityEdge :: Equation -> Equation -> Edge
@@ -44,6 +55,7 @@ identityEdge equation1 equation2 =
         ]
    in Edge [mkSCG n m entries] (Just (text ""))
   where
+    n, m :: Int
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
 
@@ -58,9 +70,11 @@ caseEdge x ys equation1 equation2 =
       label = pprWithCommas (\y -> ppr y <+> text "<" <+> ppr x) ys
    in Edge [mkSCG n m entries] (Just label)
   where
+    n, m :: Int
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
 
+    mkDecrease :: Id -> Id -> Decrease
     mkDecrease z y
       | z == x && elem y ys = Decrease
       | z == y = Equal
@@ -84,9 +98,11 @@ substEdge (Subst _ subst _ _) equation1 equation2 =
         ]
    in Edge [mkSCG n m entries] (Just (interpp'SP labels))
   where
+    n, m :: Int
     n = length (equationVars equation1) - 1
     m = length (equationVars equation2) - 1
 
+    mkDecrease :: Id -> Id -> Decrease
     mkDecrease z y =
       case lookupVarEnv subst y of
         Just (Var x)
@@ -122,7 +138,9 @@ isWellFounded = all isSCGWellFounded . edgeSCGs
 -- * Size-Change Graphs
 
 -- | An individual size-change graph.
-newtype SCG = SCG (Array.Array (Int, Int) Decrease)
+newtype SCG = SCG {
+  getEntires :: Array.Array (Int, Int) Decrease
+}
 
 instance Outputable SCG where
   ppr (SCG arr) = ppr (Array.assocs arr)

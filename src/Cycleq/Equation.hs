@@ -1,6 +1,5 @@
 -- |
 -- Module      : Cycleq.Equation
--- This module defines equations and some basic functions for their manipulation.
 module Cycleq.Equation
   ( -- * Equations
     Equation (..),
