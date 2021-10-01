@@ -17,6 +17,7 @@ import Control.Monad.Reader
 import Control.Monad.State
 import Cycleq.Edge
 import Cycleq.Environment
+import Control.Monad.Logic
 import Cycleq.Equation
 import Cycleq.Proof
 import Cycleq.Reduction
@@ -36,17 +37,23 @@ prover equation = do
     go ((fuel, proof) : proofs)
       | fuel <= 0 = go proofs
       | otherwise = do
-        proofs' <- mapReaderT (runNonDetCoreM . flip execStateT proof) step
+        proofs' <- mapReaderT (observeAllT . flip execStateT proof) step
         case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
-type ProverM env = ReaderT env (StateT Proof NonDetCoreM)
+type ProverM env = ReaderT env (StateT Proof (LogicT CoreM))
 
-cut :: [ProverM env a] -> ProverM env a
-cut ms = ReaderT $ \r ->
-  StateT $ \s ->
-    firstSuccess $ fmap (\m -> runStateT (runReaderT m r) s) ms
+firstSuccess :: MonadLogic m => [m a] -> m a
+firstSuccess [] = empty
+firstSuccess [m] =
+  msplit m >>= \case
+    Nothing -> empty
+    Just (res, alts) -> pure res <|> alts
+firstSuccess (m : ms) =
+  msplit m >>= \case
+    Nothing -> firstSuccess ms
+    Just (res, alts) -> pure res
 
 -- | Expand a partial proof tree.
 step :: ProverM ProgramEnv ()
@@ -68,7 +75,7 @@ step = do
           pprTraceM "Reduct:" (ppr [node'])
           step
         Right stuckOn ->
-          cut
+          firstSuccess
             [ do
                 -- Reflexivity
                 refl equation
@@ -181,7 +188,7 @@ casesOf dty tyargs =
 -- | Create a fresh variable of a given type.
 freshVar :: Type -> ProverM env Id
 freshVar ty = do
-  unique <- lift $ lift getUniqueM
+  unique <- lift $ lift $ lift getUniqueM
   let name = mkInternalName unique (mkVarOcc ("x_" ++ show unique)) (UnhelpfulSpan UnhelpfulGenerated)
   pure (mkLocalId name Many ty)
 

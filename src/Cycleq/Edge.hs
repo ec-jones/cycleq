@@ -163,11 +163,9 @@ substEdge (Subst _ subst _ _) (Equation xs1 lhs1 rhs1) (Equation xs2 lhs2 rhs2) 
             (y, j) <- zip xs2 [0 ..]
         ]
       labels =
-        [ ppr z <+> char '↦' <+> ppr y
-          | z <- xs1,
-            y <- xs2,
-            Just (Var x) <- pure (lookupVarEnv subst z),
-            x == y
+        [ ppr z <+> char '↦' <+> ppr expr
+            | z <- xs2,
+              Just expr <- pure (lookupVarEnv subst z)
         ]
    in Edge [mkSCG n m entries] (Just (interpp'SP labels))
   where
