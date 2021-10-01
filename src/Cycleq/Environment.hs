@@ -20,6 +20,7 @@ module Cycleq.Environment
   )
 where
 
+import Control.Monad.Logic
 import Control.Applicative
 import Control.Monad
 import GHC.Plugins hiding (empty)
@@ -66,36 +67,48 @@ intoEquationEnv xs prog =
 
 -- * Non-deterministic CoreM
 
--- | The main monad that enhances @CoreM@ with non-determinism.
--- Although CoreM is not-commutative, it is only used as a unique supply which is commutative /up-to/ renaming.
-newtype NonDetCoreM a = NonDetCoreM
-  { runNonDetCoreM :: CoreM [a]
-  }
-  deriving
-    (Functor, Applicative, Alternative)
-    via (WrappedMonad NonDetCoreM)
+type NonDetCoreM = LogicT CoreM
 
-instance Monad NonDetCoreM where
-  return = NonDetCoreM . pure . pure
+runNonDetCoreM :: NonDetCoreM a -> CoreM [a]
+runNonDetCoreM = observeAllT
 
-  NonDetCoreM m >>= f =
-    NonDetCoreM (m >>= (fmap concat . mapM (runNonDetCoreM . f)))
-
-instance MonadPlus NonDetCoreM where
-  mzero = NonDetCoreM (pure [])
-
-  mplus (NonDetCoreM m1) (NonDetCoreM m2) =
-    NonDetCoreM (liftA2 (++) m1 m2)
-
-instance MonadUnique NonDetCoreM where
-  getUniqueSupplyM =
-    NonDetCoreM (pure <$> getUniqueSupplyM)
-
--- | Select the first branch that produces any result.
 firstSuccess :: [NonDetCoreM a] -> NonDetCoreM a
 firstSuccess [] = empty
 firstSuccess (m : ms) =
-  NonDetCoreM $
-    runNonDetCoreM m >>= \case
-      [] -> runNonDetCoreM (firstSuccess ms)
-      res -> pure res
+  msplit m >>= \case
+    Nothing -> firstSuccess ms
+    Just (res, alts) -> pure res <|> alts
+
+-- -- | The main monad that enhances @CoreM@ with non-determinism.
+-- -- Although CoreM is not-commutative, it is only used as a unique supply which is commutative /up-to/ renaming.
+-- newtype NonDetCoreM a = NonDetCoreM
+--   { runNonDetCoreM :: CoreM [a]
+--   }
+--   deriving
+--     (Functor, Applicative, Alternative)
+--     via (WrappedMonad NonDetCoreM)
+
+-- instance Monad NonDetCoreM where
+--   return = NonDetCoreM . pure . pure
+
+--   NonDetCoreM m >>= f =
+--     NonDetCoreM (m >>= (fmap concat . mapM (runNonDetCoreM . f)))
+
+-- instance MonadPlus NonDetCoreM where
+--   mzero = NonDetCoreM (pure [])
+
+--   mplus (NonDetCoreM m1) (NonDetCoreM m2) =
+--     NonDetCoreM (liftA2 (++) m1 m2)
+
+-- instance MonadUnique NonDetCoreM where
+--   getUniqueSupplyM =
+--     NonDetCoreM (pure <$> getUniqueSupplyM)
+
+-- -- | Select the first branch that produces any result.
+-- firstSuccess :: [NonDetCoreM a] -> NonDetCoreM a
+-- firstSuccess [] = empty
+-- firstSuccess (m : ms) =
+--   NonDetCoreM $
+--     runNonDetCoreM m >>= \case
+--       [] -> runNonDetCoreM (firstSuccess ms)
+--       res -> pure res
