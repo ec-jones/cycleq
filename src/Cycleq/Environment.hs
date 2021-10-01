@@ -1,7 +1,7 @@
 {-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 
 -- |
 -- Module: Cycleq.Environment
@@ -20,9 +20,8 @@ module Cycleq.Environment
   )
 where
 
-import Control.Monad
 import Control.Applicative
-import qualified Data.DList as DList
+import Control.Monad
 import GHC.Plugins hiding (empty)
 
 -- * Variable Environments
@@ -68,38 +67,35 @@ intoEquationEnv xs prog =
 -- * Non-deterministic CoreM
 
 -- | The main monad that enhances @CoreM@ with non-determinism.
+-- Although CoreM is not-commutative, it is only used as a unique supply which is commutative /up-to/ renaming.
 newtype NonDetCoreM a = NonDetCoreM
-  { -- | Although CoreM is not-commutative, it is only used as a unique supply which is commutative /up-to/ renaming.
-    _runNonDetCoreM :: CoreM (DList.DList a)
+  { runNonDetCoreM :: CoreM [a]
   }
   deriving
     (Functor, Applicative, Alternative)
     via (WrappedMonad NonDetCoreM)
 
 instance Monad NonDetCoreM where
-  return = NonDetCoreM . pure . DList.singleton
+  return = NonDetCoreM . pure . pure
 
   NonDetCoreM m >>= f =
-    NonDetCoreM (m >>= (fmap (DList.foldr DList.append DList.empty) . mapM (_runNonDetCoreM . f)))
+    NonDetCoreM (m >>= (fmap concat . mapM (runNonDetCoreM . f)))
 
 instance MonadPlus NonDetCoreM where
-  mzero = NonDetCoreM (pure DList.empty)
+  mzero = NonDetCoreM (pure [])
 
   mplus (NonDetCoreM m1) (NonDetCoreM m2) =
-    NonDetCoreM (liftA2 DList.append m1 m2)
+    NonDetCoreM (liftA2 (++) m1 m2)
 
 instance MonadUnique NonDetCoreM where
   getUniqueSupplyM =
-    NonDetCoreM (DList.singleton <$> getUniqueSupplyM)
-
--- | Run a non-deterministic action to produce a list of possible results.
-runNonDetCoreM :: NonDetCoreM a -> CoreM [a]
-runNonDetCoreM = fmap DList.toList . _runNonDetCoreM 
+    NonDetCoreM (pure <$> getUniqueSupplyM)
 
 -- | Select the first branch that produces any result.
 firstSuccess :: [NonDetCoreM a] -> NonDetCoreM a
 firstSuccess [] = empty
-firstSuccess (m : ms) = NonDetCoreM $
-  _runNonDetCoreM m >>= \case
-    DList.Nil -> _runNonDetCoreM (firstSuccess ms)
-    res -> pure res
+firstSuccess (m : ms) =
+  NonDetCoreM $
+    runNonDetCoreM m >>= \case
+      [] -> runNonDetCoreM (firstSuccess ms)
+      res -> pure res

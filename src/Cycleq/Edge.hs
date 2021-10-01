@@ -16,7 +16,6 @@ where
 
 import Control.Applicative
 import Cycleq.Equation
-import qualified Data.Foldable as Foldable
 import qualified GHC.Arr as Array
 import GHC.Plugins hiding ((<>))
 
@@ -103,15 +102,15 @@ data Edge = Edge
   }
 
 instance Semigroup Edge where
-  Edge {edgeSCGs = scgs1} <> Edge {edgeSCGs = scgs2} =
+  edge1 <> edge2 =
     Edge
       { edgeSCGs =
-          Foldable.foldl'
-            ( \acc scg1 ->
-                Foldable.foldl' (\acc' scg2 -> flip insert acc' (scg1 <> scg2)) acc scgs2
+          foldr
+            ( \scg1 acc ->
+                foldr (\scg2 -> insert (scg1 <> scg2)) acc (edgeSCGs edge2)
             )
             []
-            scgs1,
+            (edgeSCGs edge1),
         edgeLabel = Nothing
       }
 

@@ -19,6 +19,7 @@ module Cycleq.Equation
 where
 
 import Control.Applicative
+import Data.Bifunctor
 import GHC.Plugins hiding (empty)
 
 -- * Equations
@@ -67,7 +68,7 @@ data SubExpr a
 
 -- | Modify a subexpression.
 withSubExpr :: Functor f => SubExpr a -> (CoreExpr -> f (b, CoreExpr)) -> f (b, a)
-withSubExpr (SubExpr expr ctx) f = (\(b, expr') -> (b, ctx expr')) <$> f expr
+withSubExpr (SubExpr expr ctx) f = second ctx <$> f expr
 
 -- | The trivial subexpression.
 root :: CoreExpr -> SubExpr CoreExpr

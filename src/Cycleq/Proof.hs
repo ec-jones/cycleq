@@ -1,15 +1,12 @@
-{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE LambdaCase #-}
 
 module Cycleq.Proof where
 
-import Control.Monad.Reader
 import Control.Applicative
+import Control.Monad.Reader
 import Control.Monad.State
 import Cycleq.Edge
 import Cycleq.Equation

@@ -1,25 +1,22 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MonoLocalBinds #-}
-{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE PartialTypeSignatures #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
-{-# LANGUAGE DerivingVia #-}
 
 module Cycleq.Prover where
 
-import Cycleq.Environment
 import Control.Applicative
 import Control.Monad.Reader
 import Control.Monad.State
 import Cycleq.Edge
+import Cycleq.Environment
 import Cycleq.Equation
 import Cycleq.Proof
 import Cycleq.Reduction
@@ -32,7 +29,7 @@ prover ::
   Equation ->
   ReaderT ProgramEnv CoreM (Maybe Proof)
 prover equation = do
-  let proof = initProof [] [equation] 
+  let proof = initProof [] [equation]
   go [(10, proof)]
   where
     go [] = pure Nothing
@@ -48,7 +45,7 @@ type ProverM env = ReaderT env (StateT Proof NonDetCoreM)
 
 cut :: [ProverM env a] -> ProverM env a
 cut ms = ReaderT $ \r ->
-  StateT $ \s -> 
+  StateT $ \s ->
     firstSuccess $ fmap (\m -> runStateT (runReaderT m r) s) ms
 
 -- | Expand a partial proof tree.
@@ -100,7 +97,6 @@ step = do
 
                 pprTraceM "FunExt:" (ppr [node'])
                 step,
-
               do
                 -- Superposition
                 -- Select a lemma node
@@ -116,33 +112,32 @@ step = do
                 insertEdge (substEdge subst equation equation') node node'
 
                 pprTraceM "Super:" (ppr [node', node''])
-              <|>
-              do
-                -- Case analysis
-                markNodeAsLemma node
-                case stuckOn of
-                  Nothing -> empty
-                  Just x
-                    | TyConApp dty tyargs <- idType x -> do
-                      nodes' <-
-                        casesOf dty tyargs
-                          >>= mapM
-                            ( \(k, xs) -> do
-                                scope <- withReaderT (intoEquationEnv ys) (asks envInScopeSet)
-                                -- ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
-                                let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs xs)]
-                                    equation' =
-                                      Equation 
-                                        (xs ++ (x `List.delete` ys))
-                                        (substExpr subst lhs)
-                                        (substExpr subst rhs)
-                                node' <- insertNode equation'
-                                insertEdge (caseEdge x xs equation equation') node node'
-                                pure node'
-                            )
+                <|> do
+                  -- Case analysis
+                  markNodeAsLemma node
+                  case stuckOn of
+                    Nothing -> empty
+                    Just x
+                      | TyConApp dty tyargs <- idType x -> do
+                        nodes' <-
+                          casesOf dty tyargs
+                            >>= mapM
+                              ( \(k, xs) -> do
+                                  scope <- withReaderT (intoEquationEnv ys) (asks envInScopeSet)
+                                  -- ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
+                                  let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs xs)]
+                                      equation' =
+                                        Equation
+                                          (xs ++ (x `List.delete` ys))
+                                          (substExpr subst lhs)
+                                          (substExpr subst rhs)
+                                  node' <- insertNode equation'
+                                  insertEdge (caseEdge x xs equation equation') node node'
+                                  pure node'
+                              )
 
-                      pprTraceM "Case:" (ppr nodes')
-                    | otherwise -> empty
+                        pprTraceM "Case:" (ppr nodes')
+                      | otherwise -> empty
             ]
 
 -- | Try to reduce either side of an equation.
@@ -164,7 +159,7 @@ refl (Equation xs lhs rhs) = do
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
 consCong :: Equation -> ProverM env [Equation]
 consCong (Equation xs (ConApp con (filter isValArg -> args)) (ConApp con' (filter isValArg -> args')))
-  | con == con' = pure (zipWith (\arg arg' -> Equation xs arg arg') args args')
+  | con == con' = pure (zipWith (Equation xs) args args')
 consCong (Equation _ (Lit' lit) (Lit' lit'))
   | lit == lit' = pure []
 consCong _ = empty
@@ -175,9 +170,8 @@ funExt (Equation xs lhs rhs) = do
   let ty = exprType lhs
   guard (isFunTy ty)
   x <- freshVar (funArgTy ty)
-  pure
-    $ Equation (x : xs) (App lhs (Var x)) (App rhs (Var x))
-
+  pure $
+    Equation (x : xs) (App lhs (Var x)) (App rhs (Var x))
 
 -- | Generate a fresh instance for each possible constructor.
 casesOf :: TyCon -> [Type] -> ProverM env [(DataCon, [Var])]
@@ -202,7 +196,7 @@ superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
         guard (isNonVar lhs)
         subst <- match ys scope lhs expr
         pure (subst, substExpr subst rhs)
-      )
+    )
       <|> ( do
               guard (isNonVar rhs)
               subst <- match ys scope rhs expr
