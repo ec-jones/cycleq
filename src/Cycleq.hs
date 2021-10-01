@@ -11,7 +11,7 @@ import Data.Maybe
 import Cycleq.Proof
 import Control.Monad.Reader
 import Data.Bifunctor
-import Cycleq.Reduction
+import Cycleq.Environment
 import GHC.Plugins hiding (empty)
 
 -- | Construct an equation between two terms.
@@ -39,7 +39,7 @@ plugin =
                  ] of
               [] -> pure ()
               (main : _) -> do
-                let equation = fromJust $ fromCore main
+                let equation = fromJust $ equationFromCore main
                 proof <- fromJust <$> runReaderT (prover equation) (mkProgramEnv prog)
                 drawProof proof "proof.svg"
             pure mguts

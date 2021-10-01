@@ -1,24 +1,25 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE MonoLocalBinds #-}
-{-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE LambdaCase #-}
 
 module Cycleq.Proof where
 
+import Control.Monad.Reader
 import Control.Applicative
-import Control.Monad
-import Control.Monad.Freer
-import Control.Monad.Freer.NonDet
-import Control.Monad.Freer.State
+import Control.Monad.State
 import Cycleq.Edge
 import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
 import qualified Data.IntMap as IntMap
 import qualified Data.List as List
-import Data.Maybe
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
+import GHC.Data.Maybe
 import GHC.Plugins hiding (empty)
 import System.IO
 import System.Process
@@ -38,7 +39,7 @@ alterAdjMap go source target =
 data Proof = Proof
   { proofNodes :: IntMap.IntMap Equation,
     proofEdges :: AdjMap,
-    -- | Nodes without a proof
+    -- | Nodes without a justification
     proofIncompleteNodes :: [Node],
     -- | Nodes suitable for superposition
     proofLemmas :: [Node]
@@ -54,8 +55,18 @@ emptyProof lemmas =
       proofLemmas = [0 .. length lemmas - 1]
     }
 
+-- | An initial proof with a set of lemmas and no edges.
+initProof :: [Equation] -> [Equation] -> Proof
+initProof lemmas goals =
+  Proof
+    { proofNodes = IntMap.fromList (zip [0 ..] (lemmas ++ goals)),
+      proofEdges = IntMap.empty,
+      proofIncompleteNodes = [length lemmas .. length goals - 1],
+      proofLemmas = [0 .. length lemmas - 1]
+    }
+
 -- | Insert a equation into a proof and return the new node's index.
-insertNode :: Member (State Proof) es => Equation -> Eff es Node
+insertNode :: MonadState Proof m => Equation -> m Node
 insertNode equation = do
   proof@Proof {proofNodes, proofIncompleteNodes} <- get
   case IntMap.lookupMax proofNodes of
@@ -71,33 +82,33 @@ insertNode equation = do
       put
         ( proof
             { proofNodes = IntMap.insert (n + 1) equation proofNodes,
-              proofIncompleteNodes = List.insert  (n + 1) proofIncompleteNodes
+              proofIncompleteNodes = List.insert (n + 1) proofIncompleteNodes
             }
         )
       pure (n + 1)
 
--- | Mark a node as complete.
-markNodeAsComplete :: Member (State Proof) es => Node -> Eff es ()
-markNodeAsComplete node = modify $
+-- | Mark a node as justified.
+markNodeAsJustified :: MonadState Proof m => Node -> m ()
+markNodeAsJustified node = modify $
   \proof@Proof {proofIncompleteNodes} ->
     proof {proofIncompleteNodes = List.delete node proofIncompleteNodes}
 
 -- | Mark a node as suitable for superposition.
-markNodeAsSuper :: Member (State Proof) es => Node -> Eff es ()
-markNodeAsSuper node = modify $
+markNodeAsLemma :: MonadState Proof m => Node -> m ()
+markNodeAsLemma node = modify $
   \proof@Proof {proofLemmas} ->
     proof {proofLemmas = List.insert node proofLemmas}
 
 -- | Get the equation of a given node.
-lookupNode :: Member (State Proof) es => Node -> Eff es Equation
+lookupNode :: MonadState Proof m => Node -> m Equation
 lookupNode node = do
-  Proof {proofNodes} <- get
-  case IntMap.lookup node proofNodes of
+  proof <- get
+  case IntMap.lookup node (proofNodes proof) of
     Nothing -> pprPanic "Node not in graph!" (ppr node)
-    Just equation -> pure equation
+    Just equation -> return equation
 
--- | Insert an edge into a proof and fail if this creates a cycle.
-insertEdge :: (Member NonDet es, Member (State Proof) es) => Edge -> Node -> Node -> Eff es ()
+-- | Insert an edge into a proof and returns False if this creates a bad cycle.
+insertEdge :: (Alternative m, MonadState Proof m) => Edge -> Node -> Node -> m ()
 insertEdge edge source target
   | source == target, not (isWellFounded edge) = empty
   | otherwise = do
@@ -109,8 +120,8 @@ insertEdge edge source target
   where
     alterEdge Nothing = (True, edge)
     alterEdge (Just edge')
-      | edge `isAsStrongAsEdge` edge' = (False, edge' {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
-      | edge' `isAsStrongAsEdge` edge = (True, edge {edgeLabel = edgeLabel edge <|> edgeLabel edge'})
+      | edge `isAsStrongAsEdge` edge' = (False, edge' {edgeLabel = edgeLabel edge `firstJust` edgeLabel edge'})
+      | edge' `isAsStrongAsEdge` edge = (True, edge {edgeLabel = edgeLabel edge `firstJust` edgeLabel edge'})
       | otherwise = (True, unionEdges edge edge')
 
     close edges = do

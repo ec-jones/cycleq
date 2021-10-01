@@ -3,49 +3,19 @@
 
 -- |
 -- Module      : Cycleq.Reduction
--- This module defines variable environments and the reduction of core expression.
 module Cycleq.Reduction
-  ( -- * Reduction Environment
-    ReductionEnv (..),
-    mkReductionEnv,
-
-    -- * Reduction
+  ( -- * Reduction
     Reduct (..),
     reduce,
   )
 where
 
-import Control.Applicative
-import Control.Monad.Reader
 import Control.Monad.Writer
+import Control.Monad.Reader
+import Cycleq.Environment
 import GHC.Data.Maybe
+import Control.Applicative
 import GHC.Plugins hiding (empty)
-
--- * Reduction Environment
-
--- | The variable environment for reduction.
-data ReductionEnv = ReductionEnv
-  { reductionFreeVars :: IdSet,
-    reductionBoundVars :: IdEnv CoreExpr,
-    reductionInScopeSet :: InScopeSet
-  }
-
--- | Make a program environment from a program.
-mkReductionEnv :: [Id] -> CoreProgram -> ReductionEnv
-mkReductionEnv xs binds =
-  ReductionEnv
-    { reductionFreeVars = mkVarSet xs,
-      reductionBoundVars = mkVarEnv (flattenBinds binds),
-      reductionInScopeSet = mkInScopeSet (mkVarSet (xs ++ bindersOfBinds binds))
-    }
-
--- | Extend an environment with a local binder.
-bindReductionEnv :: CoreBind -> ReductionEnv -> ReductionEnv
-bindReductionEnv bind env =
-  env
-    { reductionBoundVars = extendVarEnvList (reductionBoundVars env) (flattenBinds [bind]),
-      reductionInScopeSet = extendInScopeSetList (reductionInScopeSet env) (bindersOf bind)
-    }
 
 -- * Reduction
 
@@ -57,9 +27,12 @@ data Reduct = Reduct
   }
 
 -- | Reduce a core expression as far as possible.
-reduce :: forall m. MonadReader ReductionEnv m => CoreExpr -> m Reduct
+reduce :: forall m. MonadReader EquationEnv m => CoreExpr -> m Reduct
 reduce expr = handler (go False expr [])
   where
+    -- Produce a 'Reduct' from an effectful expression.
+    -- Failure is interpreted as a non-proper reduction
+    -- The Writer records which variable is preventing further reduction.
     handler :: MaybeT (WriterT (First Id) m) CoreExpr -> m Reduct
     handler m = do
       (expr', First x) <- runWriterT (runMaybeT m)
@@ -74,17 +47,13 @@ reduce expr = handler (go False expr [])
     -- Non-proper reducts are permited if @notProper@ is set.
     go :: Bool -> CoreExpr -> [CoreArg] -> MaybeT (WriterT (First Id) m) CoreExpr
     go notProper (Var x) args = do
-      ReductionEnv
-        { reductionFreeVars = fvs,
-          reductionBoundVars = bvs
-        } <-
-        ask
-      case lookupVarEnv bvs x of
+      env <- ask
+      case lookupVarEnv (envBoundVars env) x of
         Nothing
           | isDataConWorkId x -> do
             guard notProper
             pure (mkApps (Var x) args)
-          | elemVarSet x fvs -> do
+          | elemVarSet x (envFreeVars env) -> do
             guard notProper
             tell (First (Just x)) -- Mark x as preventing reduction
             pure (mkApps (Var x) args)
@@ -99,23 +68,23 @@ reduce expr = handler (go False expr [])
     go notProper (App fun arg) args = go notProper fun (arg : args)
     go notProper (Lam x body) [] = empty
     go notProper (Lam x body) (arg : args) = do
-      scope <- asks reductionInScopeSet
+      scope <- asks envInScopeSet
       let subst = mkOpenSubst scope [(x, arg)]
       go True (substExpr subst body) args
     go notProper (Let bind body) [] =
-      Let bind <$> local (bindReductionEnv bind) (go notProper body [])
-    go notProper (Case scrut x ty alts) [] = do
+      Let bind <$> local (extendEquationEnv bind) (go notProper body [])
+    go notProper (Case scrut x ty alts) args = do
       scrut' <- go True scrut []
       case viewNormalForm scrut' of
-        Just (Left (con, args))
+        Just (Left (con, conArgs))
           | Just (_, patVars, rhs) <- findAlt (DataAlt con) alts -> do
-            scope <- asks reductionInScopeSet
-            let subst = mkOpenSubst scope ((x, scrut') : zip patVars args)
-            go True (substExpr subst rhs) []
+            scope <- asks envInScopeSet
+            let subst = mkOpenSubst scope ((x, scrut') : zip patVars conArgs)
+            go True (substExpr subst rhs) args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Just (Right lit)
           | Just (_, [], rhs) <- findAlt (LitAlt lit) alts -> do
-            go True rhs []
+            go True rhs args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Nothing -> empty
     go notProper expr' args =

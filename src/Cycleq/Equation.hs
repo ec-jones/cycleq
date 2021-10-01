@@ -1,69 +1,101 @@
+{-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DerivingStrategies #-}
+
 -- |
--- Module      : Cycleq.Equation
+-- Module: Cycleq.Equation
 module Cycleq.Equation
   ( -- * Equations
     Equation (..),
-    fromCore,
-    subtermsForSuper,
+    pprQualified,
+    equationFromCore,
+
+    -- * Subexpressions
+    SubExpr,
+    withSubExpr,
+    exprSubExprs,
+    equationSubExprs,
+    isVariableSubExpr,
   )
 where
 
-import Data.Bifunctor
+import Control.Applicative
 import GHC.Plugins hiding (empty)
 
--- | Simple equation between core expressions
-data Equation = Equation
-  { -- | Universally quantified variables
-    equationVars :: [Id],
-    -- | Left-hand side of the equation
-    equationLeft :: CoreExpr,
-    -- | Right-hand side of the equation
-    equationRight :: CoreExpr
-  }
+-- * Equations
+
+-- | An equation between core expressions.
+data Equation
+  = Equation
+      [Id]
+      -- ^ Universally quantified variables.
+      CoreExpr
+      -- ^ Left-hand side of the equation.
+      CoreExpr
+      -- ^ Right-hand side of the equation.
 
 instance Outputable Equation where
-  ppr (Equation xs lhs rhs)
-    | not (null xs) =
-      char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> body
-    | otherwise = body
-    where
-      body :: SDoc
-      body =
-        -- Suppress type applications
-        updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
-          -- Never qualify names
-          withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
-            ppr lhs <+> char '≃' <+> ppr rhs
+  ppr (Equation xs lhs rhs) =
+    -- Suppress type applications
+    updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
+      -- Never qualify names
+      withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
+        ppr lhs <+> char '≃' <+> ppr rhs
 
--- | Interpret a core expression as an equation
-fromCore :: CoreExpr -> Maybe Equation
-fromCore expr
+-- | Print an equation with explicit variable quantification.
+pprQualified :: Equation -> SDoc
+pprQualified eq@(Equation xs _ _)
+  | not (null xs) = char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> ppr eq
+  | otherwise = ppr eq
+
+-- | Construct an equation from a core expression of the form @\\x1 ... xn -> lhs ≃ rhs@.
+equationFromCore :: CoreExpr -> Maybe Equation
+equationFromCore expr
   | let (xs, body) = collectBinders expr,
     (Var eq, [ty, lhs, rhs]) <- collectArgs body,
     occName eq == mkVarOcc "≃" =
     Just (Equation (filter isId xs) lhs rhs)
   | otherwise = Nothing
 
--- | The non-variable subterms of an equation.
-subtermsForSuper :: Equation -> [(CoreExpr, CoreExpr -> Equation)]
-subtermsForSuper (Equation xs lhs rhs) = lefts ++ rights
-  where
-    lefts, rights :: [(CoreExpr, CoreExpr -> Equation)]
-    lefts =
-      second (flip (Equation xs) rhs .) <$> exprSubtermsForSuper lhs
-    rights =
-      second (Equation xs lhs .) <$> exprSubtermsForSuper rhs
+-- * Subexpressions.
 
--- | The non-variable subterms of an expression.
-exprSubtermsForSuper :: CoreExpr -> [(CoreExpr, CoreExpr -> CoreExpr)]
-exprSubtermsForSuper (App fun arg) =
-  (App fun arg, id) :
-  (second (App fun .) <$> exprSubtermsForSuper arg)
-    ++ (second (flip App arg .) <$> exprSubtermsForSuper fun)
-exprSubtermsForSuper (Lam x body) =
-  (Lam x body, id) :
-  (second (Lam x .) <$> exprSubtermsForSuper body)
-exprSubtermsForSuper (Let bind body) =
-  (Let bind body, id) :
-  (second (Let bind .) <$> exprSubtermsForSuper body)
-exprSubtermsForSuper _ = []
+-- | A subexpression within a larger context of type @a@.
+data SubExpr a
+  = SubExpr
+      CoreExpr
+      (CoreExpr -> a)
+  deriving stock (Functor)
+
+-- | Modify a subexpression.
+withSubExpr :: Functor f => SubExpr a -> (CoreExpr -> f (b, CoreExpr)) -> f (b, a)
+withSubExpr (SubExpr expr ctx) f = (\(b, expr') -> (b, ctx expr')) <$> f expr
+
+-- | The trivial subexpression.
+root :: CoreExpr -> SubExpr CoreExpr
+root expr = SubExpr expr id
+
+-- | Enumerate applicative subexpressions (i.e. not case altneratives) of a core expression.
+exprSubExprs :: Alternative f => CoreExpr -> f (SubExpr CoreExpr)
+exprSubExprs (Var x) = pure (root (Var x))
+exprSubExprs (Lit lit) = pure (root (Lit lit))
+exprSubExprs (App fun arg) =
+  pure (root (App fun arg))
+    <|> fmap (`App` arg) <$> exprSubExprs fun
+    <|> fmap (App fun) <$> exprSubExprs arg
+exprSubExprs (Lam x body) =
+  pure (root (Lam x body))
+    <|> fmap (Lam x) <$> exprSubExprs body
+exprSubExprs (Let bind body) =
+  pure (root (Let bind body))
+    <|> fmap (Let bind) <$> exprSubExprs body
+exprSubExprs nonApp = empty
+
+-- | Enumerate applicative subexpressions of either side of an equation.
+equationSubExprs :: Alternative f => Equation -> f (SubExpr Equation)
+equationSubExprs (Equation xs lhs rhs) =
+  fmap (flip (Equation xs) rhs) <$> exprSubExprs lhs
+    <|> fmap (Equation xs lhs) <$> exprSubExprs rhs
+
+-- | Is the subexpression a variable?
+isVariableSubExpr :: SubExpr a -> Bool
+isVariableSubExpr (SubExpr (Var _) _) = True
+isVariableSubExpr nonVar = False

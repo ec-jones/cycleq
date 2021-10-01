@@ -12,6 +12,7 @@ library
   exposed-modules:    Cycleq
 
   other-modules:      Cycleq.Equation,
+                      Cycleq.Environment,
                       Cycleq.Reduction,
                       Cycleq.Edge,
                       Cycleq.Proof,
@@ -21,8 +22,8 @@ library
 
   build-depends:      base,
                       containers,
+                      dlist,
                       mtl,
-                      logict,
                       text,
                       process,
                       ghc,

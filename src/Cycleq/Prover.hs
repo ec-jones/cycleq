@@ -1,24 +1,24 @@
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MonoLocalBinds #-}
 {-# LANGUAGE NamedFieldPuns #-}
 {-# LANGUAGE PartialTypeSignatures #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# LANGUAGE DerivingVia #-}
 
 module Cycleq.Prover where
 
-import Cycleq.Patterns
+import Cycleq.Environment
 import Control.Applicative
-import Control.Monad
-import Control.Monad.Freer
-import Control.Monad.Freer.NonDet
-import Control.Monad.Freer.Reader
-import Control.Monad.Reader (runReaderT)
-import Control.Monad.Freer.State
+import Control.Monad.Reader
+import Control.Monad.State
 import Cycleq.Edge
 import Cycleq.Equation
 import Cycleq.Proof
@@ -29,99 +29,98 @@ import GHC.Plugins hiding (empty)
 
 -- | Breadth-first search for a proof.
 prover ::
-  ( Member CoreM es,
-    Member (Reader CoreProgram) es
-  ) =>
   Equation ->
-  Eff es (Maybe Proof)
+  ReaderT ProgramEnv CoreM (Maybe Proof)
 prover equation = do
-  proof <- execState (emptyProof []) (insertNode equation)
+  let proof = initProof [] [equation] 
   go [(10, proof)]
   where
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
       | fuel <= 0 = go proofs
       | otherwise = do
-        proofs' <- makeChoiceA (execState proof step)
+        proofs' <- mapReaderT (runNonDetCoreM . flip execStateT proof) step
         case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
+type ProverM env = ReaderT env (StateT Proof NonDetCoreM)
+
+cut :: [ProverM env a] -> ProverM env a
+cut ms = ReaderT $ \r ->
+  StateT $ \s -> 
+    firstSuccess $ fmap (\m -> runStateT (runReaderT m r) s) ms
+
 -- | Expand a partial proof tree.
-step ::
-  ( Member CoreM es,
-    Member (Reader CoreProgram) es,
-    Member NonDet es,
-    Member (State Proof) es
-  ) =>
-  Eff es ()
+step :: ProverM ProgramEnv ()
 step = do
-  nodes <- gets proofIncompleteNodes
-  case nodes of
+  proof <- get
+  case proofIncompleteNodes proof of
     [] -> pure ()
     (node : _) -> do
-      equation <- lookupNode node
-      send $ putMsg (ppr node GHC.Plugins.<> text ":" <+> ppr equation)
-      reduceEquation equation
-        >>= \case
-          Left equation' -> do
-            node' <- insertNode equation'
-            insertEdge (identityEdge equation equation') node node'
+      equation@(Equation ys lhs rhs) <- lookupNode node
+      markNodeAsJustified node
+      pprTraceM (show node ++ ":") (ppr equation)
 
-            send (putMsg $ text "Reduct: " <+> ppr [node'])
-            markNodeAsComplete node
-            step
-          Right mx ->
-            msum
-              [ -- Refl
-                do
-                  refl equation
+      reduceEquation equation >>= \case
+        Left equation' -> do
+          -- Reduce
+          node' <- insertNode equation'
+          insertEdge (identityEdge equation equation') node node'
 
-                  send (putMsg $ text "Refl: []")
-                  markNodeAsComplete node
-                  step,
-                -- Cong
-                do
-                  equations' <- consCong equation
-                  nodes' <-
-                    mapM
-                      ( \equation' -> do
-                          node' <- insertNode equation'
-                          insertEdge (identityEdge equation equation') node node'
-                          pure node'
-                      )
-                      equations'
+          pprTraceM "Reduct:" (ppr [node'])
+          step
+        Right stuckOn ->
+          cut
+            [ do
+                -- Reflexivity
+                refl equation
 
-                  send (putMsg $ text "Cong: " <+> ppr nodes')
-                  markNodeAsComplete node
-                  step,
-                -- FunExt
-                do
-                  equation' <- funExt equation
-                  node' <- insertNode equation'
-                  insertEdge (identityEdge equation equation') node node'
+                pprTraceM "Refl:" (ppr ([] :: [Node]))
+                step,
+              do
+                -- Congruence
+                equations' <- consCong equation
+                nodes <-
+                  mapM
+                    ( \equation' -> do
+                        node' <- insertNode equation'
+                        insertEdge (identityEdge equation equation') node node'
+                        pure node'
+                    )
+                    equations'
+                pprTraceM "Cong:" (ppr nodes)
+                step,
+              do
+                -- Function Extensionality
+                markNodeAsLemma node
+                equation' <- funExt equation
+                node' <- insertNode equation'
+                insertEdge (identityEdge equation equation') node node'
 
-                  send (putMsg $ text "FunExt: " <+> ppr [node'])
-                  markNodeAsComplete node
-                  step,
-                -- Super
-                do
-                  -- Select a lemma node
-                  node' <- gets proofLemmas >>= choose
-                  equation' <- lookupNode node'
+                pprTraceM "FunExt:" (ppr [node'])
+                step,
 
-                  -- Rewrite current goal
-                  (subst, equation'') <- superpose equation equation'
-                  node'' <- insertNode equation''
+              do
+                -- Superposition
+                -- Select a lemma node
+                node' <- gets proofLemmas >>= msum . fmap pure
+                equation' <- lookupNode node'
 
-                  -- Add edges
-                  insertEdge (identityEdge equation equation'') node node''
-                  insertEdge (substEdge subst equation equation') node node'
+                -- Rewrite current goal
+                (subst, equation'') <- superpose equation equation'
+                node'' <- insertNode equation''
 
-                  send (putMsg $ text "Super: " <+> ppr [node', node''])
-                  markNodeAsComplete node,
-                -- Case
-                case mx of
+                -- Add edges
+                insertEdge (identityEdge equation equation'') node node''
+                insertEdge (substEdge subst equation equation') node node'
+
+                pprTraceM "Super:" (ppr [node', node''])
+              <|>
+              do
+                -- Case analysis
+                markNodeAsLemma node
+                case stuckOn of
                   Nothing -> empty
                   Just x
                     | TyConApp dty tyargs <- idType x -> do
@@ -129,101 +128,97 @@ step = do
                         casesOf dty tyargs
                           >>= mapM
                             ( \(k, xs) -> do
-                                ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
-                                let subst = mkOpenSubst reductionInScopeSet [(x, mkConApp2 k tyargs xs)]
+                                scope <- withReaderT (intoEquationEnv ys) (asks envInScopeSet)
+                                -- ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
+                                let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs xs)]
                                     equation' =
-                                        equation
-                                          { equationVars = xs ++ (x `List.delete` equationVars equation),
-                                            equationLeft = substExpr subst (equationLeft equation),
-                                            equationRight = substExpr subst (equationRight equation)
-                                          }
+                                      Equation 
+                                        (xs ++ (x `List.delete` ys))
+                                        (substExpr subst lhs)
+                                        (substExpr subst rhs)
                                 node' <- insertNode equation'
                                 insertEdge (caseEdge x xs equation equation') node node'
                                 pure node'
                             )
 
-                      send (putMsg $ text "Case: " <+> ppr nodes')
-                      markNodeAsComplete node
-                      markNodeAsSuper node
+                      pprTraceM "Case:" (ppr nodes')
                     | otherwise -> empty
-              ]
+            ]
 
 -- | Try to reduce either side of an equation.
-reduceEquation :: (Member (Reader CoreProgram) es) => Equation -> Eff es (Either Equation (Maybe Id))
-reduceEquation eq@Equation {equationVars, equationLeft, equationRight} = do
-  prog <- ask
-  lhs <- runReaderT (reduce equationLeft) (mkReductionEnv equationVars prog)
-  rhs <- runReaderT (reduce equationRight) (mkReductionEnv equationVars prog)
+reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
+reduceEquation (Equation xs lhs rhs) = withReaderT (intoEquationEnv xs) $ do
+  lhs <- reduce lhs
+  rhs <- reduce rhs
   pure $
     if reductIsProper lhs || reductIsProper rhs
-      then Left (eq {equationLeft = reductExpr lhs, equationRight = reductExpr rhs})
+      then Left (Equation xs (reductExpr lhs) (reductExpr rhs))
       else Right (reductStuckOn lhs <|> reductStuckOn rhs)
 
 -- | Reflexivity
-refl :: (Member (Reader CoreProgram) es, Member NonDet es) => Equation -> Eff es ()
-refl Equation {equationVars, equationLeft, equationRight} = do
-  ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv equationVars)
-  guard (eqExpr reductionInScopeSet equationLeft equationRight)
+refl :: Equation -> ProverM ProgramEnv ()
+refl (Equation xs lhs rhs) = do
+  scope <- asks (envInScopeSet . intoEquationEnv xs)
+  guard (eqExpr scope lhs rhs)
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
-consCong :: Member NonDet es => Equation -> Eff es [Equation]
-consCong eq@Equation {equationLeft = ConApp con (filter isValArg -> args), equationRight = ConApp con' (filter isValArg -> args')}
-  | con == con' = pure (zipWith (\arg arg' -> eq {equationLeft = arg, equationRight = arg'}) args args')
-consCong eq@Equation {equationLeft = Lit' lit, equationRight = Lit' lit'}
+consCong :: Equation -> ProverM env [Equation]
+consCong (Equation xs (ConApp con (filter isValArg -> args)) (ConApp con' (filter isValArg -> args')))
+  | con == con' = pure (zipWith (\arg arg' -> Equation xs arg arg') args args')
+consCong (Equation _ (Lit' lit) (Lit' lit'))
   | lit == lit' = pure []
 consCong _ = empty
 
 -- | Create a fresh variable as an argument to both sides.
-funExt :: (Member NonDet es, Member CoreM es) => Equation -> Eff es Equation
-funExt Equation {equationVars, equationLeft, equationRight} = do
-  let ty = exprType equationLeft
+funExt :: Equation -> ProverM env Equation
+funExt (Equation xs lhs rhs) = do
+  let ty = exprType lhs
   guard (isFunTy ty)
   x <- freshVar (funArgTy ty)
   pure
-    Equation
-    { equationVars = x : equationVars,
-      equationLeft = App equationLeft (Var x),
-      equationRight = App equationRight (Var x)
-    }
+    $ Equation (x : xs) (App lhs (Var x)) (App rhs (Var x))
+
 
 -- | Generate a fresh instance for each possible constructor.
-casesOf :: Member CoreM es => TyCon -> [Type] -> Eff es [(DataCon, [Var])]
+casesOf :: TyCon -> [Type] -> ProverM env [(DataCon, [Var])]
 casesOf dty tyargs =
   mapM (\con -> (con,) <$> mapM freshVar (scaledThing <$> dataConInstArgTys con tyargs)) (tyConDataCons dty)
 
 -- | Create a fresh variable of a given type.
-freshVar :: Member CoreM es => Type -> Eff es Id
+freshVar :: Type -> ProverM env Id
 freshVar ty = do
-  unique <- send (getUniqueM :: CoreM Unique)
+  unique <- lift $ lift getUniqueM
   let name = mkInternalName unique (mkVarOcc ("x_" ++ show unique)) (UnhelpfulSpan UnhelpfulGenerated)
   pure (mkLocalId name Many ty)
 
 -- | Rewrite the first equation with an instance of the second.
-superpose :: (Member (Reader CoreProgram) es, Member NonDet es, Member CoreM es) => Equation -> Equation -> Eff es (Subst, Equation)
-superpose goal lemma@Equation {equationVars, equationLeft, equationRight} = do
-  ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv equationVars)
-  (expr, ctx) <- choose (subtermsForSuper goal)
-  ( do
-      guard (isNonVar equationLeft)
-      subst <- match equationVars reductionInScopeSet equationLeft expr
-      pure (subst, ctx (substExpr subst equationRight))
-    )
-    <|> ( do
-            guard (isNonVar equationRight)
-            subst <- match equationVars reductionInScopeSet equationRight expr
-            pure (subst, ctx (substExpr subst equationLeft))
-        )
+superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
+superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
+  scope <- withReaderT (intoEquationEnv xs) (asks envInScopeSet)
+  sub <- equationSubExprs goal
+  guard (not (isVariableSubExpr sub))
+  withSubExpr sub $ \expr ->
+    ( do
+        guard (isNonVar lhs)
+        subst <- match ys scope lhs expr
+        pure (subst, substExpr subst rhs)
+      )
+      <|> ( do
+              guard (isNonVar rhs)
+              subst <- match ys scope rhs expr
+              pure (subst, substExpr subst lhs)
+          )
   where
     isNonVar (Var _) = False
     isNonVar _ = True
 
 -- | Find an instance of the first expression that is alpha equivalent to the second.
-match :: forall es. Member NonDet es => [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> Eff es Subst
+match :: [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> ProverM ProgramEnv Subst
 match univs scope expr1 expr2 = do
   guard (eqType (exprType expr1) (exprType expr2))
-  runReader (mkRnEnv2 scope) $ execState (mkEmptySubst scope) (go expr1 expr2)
+  runReaderT (execStateT (go expr1 expr2) (mkEmptySubst scope)) (mkRnEnv2 scope)
   where
-    go :: CoreExpr -> CoreExpr -> Eff (State Subst ': Reader RnEnv2 ': es) ()
+    go :: CoreExpr -> CoreExpr -> StateT Subst (ReaderT RnEnv2 (ProverM env)) ()
     go (Var x) e
       | x `elem` univs = modify (\subst -> extendIdSubst subst x e)
       | Var y <- e = do
@@ -249,15 +244,31 @@ match univs scope expr1 expr2 = do
             go body1 body2
     go _ _ = empty
 
-infixr 2 `cut`
+-- | Core expressions that are the application of a data constructor to several arguments.
+pattern ConApp :: DataCon -> [CoreArg] -> CoreExpr
+pattern ConApp con args <-
+  (viewConApp -> Just (con, args))
+  where
+    ConApp con args = mkCoreConApps con args
 
--- | Take only the first element if it succeeds.
-cut :: Member NonDet es => Eff es a -> Eff es a -> Eff es a
-cut m1 m2 =
-  msplit m1 >>= \case
-    Nothing -> m2
-    Just (a, m1') -> pure a
+viewConApp :: CoreExpr -> Maybe (DataCon, [CoreArg])
+viewConApp = go [] []
+  where
+    go binds args (Var x) = do
+      con <- isDataConWorkId_maybe x
+      pure (con, fmap (\arg -> foldr Let arg binds) args)
+    go binds args (App fun arg) = go binds (arg : args) fun
+    go binds [] (Let bind body) = go (bind : binds) [] body
+    go _ _ _ = Nothing
 
--- | Choose an element from a list.
-choose :: Member NonDet es => [a] -> Eff es a
-choose = msum . fmap pure
+-- | Core expressions that are literals under a number of let-bindings.
+pattern Lit' :: Literal -> CoreExpr
+pattern Lit' lit <-
+  (viewLit -> Just lit)
+  where
+    Lit' lit = Lit lit
+
+viewLit :: CoreExpr -> Maybe Literal
+viewLit (Lit lit) = Just lit
+viewLit (Let _ body) = viewLit body
+viewLit _ = Nothing
