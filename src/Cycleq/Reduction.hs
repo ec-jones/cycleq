@@ -2,7 +2,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- |
--- Module      : Cycleq.Reduction
+-- Module: Cycleq.Reduction
 module Cycleq.Reduction
   ( -- * Reduction
     Reduct (..),
@@ -66,7 +66,9 @@ reduce expr = handler (go False expr [])
                     pure (mkApps (Var x) args)
                 )
     go notProper (Lit lit) args = pure (mkApps (Lit lit) args)
-    go notProper (App fun arg) args = go notProper fun (arg : args)
+    go notProper (App fun arg) args = do
+      arg' <- censor (const mempty) (go True arg []) -- Call-by-value stategy
+      go notProper fun (arg' : args)
     go notProper (Lam x body) [] = empty
     go notProper (Lam x body) (arg : args) = do
       scope <- asks envInScopeSet

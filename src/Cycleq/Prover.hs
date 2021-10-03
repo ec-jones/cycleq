@@ -1,14 +1,16 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 
-module Cycleq.Prover where
+-- |
+-- Module: Cycleq.Prover
+module Cycleq.Prover (prover) where
 
 import Control.Applicative
+import Control.Monad.Logic
 import Control.Monad.Reader
 import Control.Monad.State
 import Cycleq.Edge
 import Cycleq.Environment
-import Control.Monad.Logic
 import Cycleq.Equation
 import Cycleq.Proof
 import Cycleq.Reduction
@@ -24,6 +26,7 @@ prover equation = do
   let proof = initProof [] [equation]
   go [(10, proof)]
   where
+    go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
       | fuel <= 0 = go proofs
@@ -64,78 +67,75 @@ step = do
           pprTraceM "Reduct:" (ppr [node'])
           step
         Right stuckOn ->
-            do
-                -- Reflexivity
-                refl equation
+          do
+            -- Reflexivity
+            refl equation
 
-                pprTraceM "Refl:" (ppr ([] :: [Node]))
-                step
-          `cut`
-              do
-                -- Congruence
-                equations' <- consCong equation
-                nodes <-
-                  mapM
-                    ( \equation' -> do
-                        node' <- insertNode equation'
-                        insertEdge (identityEdge equation equation') node node'
-                        pure node'
-                    )
-                    equations'
-                pprTraceM "Cong:" (ppr nodes)
-                step
-            `cut`
-              do
-                -- Function Extensionality
-                markNodeAsLemma node
-                equation' <- funExt equation
-                node' <- insertNode equation'
-                insertEdge (identityEdge equation equation') node node'
+            pprTraceM "Refl:" (ppr ([] :: [Node]))
+            step
+            `cut` do
+              -- Congruence
+              equations' <- consCong equation
+              nodes <-
+                mapM
+                  ( \equation' -> do
+                      node' <- insertNode equation'
+                      insertEdge (identityEdge equation equation') node node'
+                      pure node'
+                  )
+                  equations'
+              pprTraceM "Cong:" (ppr nodes)
+              step
+            `cut` do
+              -- Function Extensionality
+              markNodeAsLemma node
+              equation' <- funExt equation
+              node' <- insertNode equation'
+              insertEdge (identityEdge equation equation') node node'
 
-                pprTraceM "FunExt:" (ppr [node'])
-                step
-            `cut`
-              (do
-                -- Superposition
-                -- Select a lemma node
-                node' <- gets proofLemmas >>= msum . fmap pure
-                equation' <- lookupNode node'
+              pprTraceM "FunExt:" (ppr [node'])
+              step
+            `cut` ( do
+                      -- Superposition
+                      -- Select a lemma node
+                      node' <- gets proofLemmas >>= msum . fmap pure
+                      equation' <- lookupNode node'
 
-                -- Rewrite current goal
-                (subst, equation'') <- superpose equation equation'
-                node'' <- insertNode equation''
+                      -- Rewrite current goal
+                      (subst, equation'') <- superpose equation equation'
+                      node'' <- insertNode equation''
 
-                -- Add edges
-                insertEdge (identityEdge equation equation'') node node''
-                insertEdge (substEdge subst equation equation') node node'
+                      -- Add edges
+                      insertEdge (identityEdge equation equation'') node node''
+                      insertEdge (substEdge subst equation equation') node node'
 
-                pprTraceM "Super:" (ppr [node', node''])
-                <|> do
-                  -- Case analysis
-                  markNodeAsLemma node
-                  case stuckOn of
-                    Nothing -> empty
-                    Just x
-                      | TyConApp dty tyargs <- idType x -> do
-                        nodes' <-
-                          casesOf dty tyargs
-                            >>= mapM
-                              ( \(k, fresh) -> do
-                                  scope <- asks (envInScopeSet . intoEquationEnv xs)
-                                  let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
-                                      equation' =
-                                        Equation
-                                          (fresh ++ (x `List.delete` xs))
-                                          (substExpr subst lhs)
-                                          (substExpr subst rhs)
-                                  node' <- insertNode equation'
-                                  insertEdge (caseEdge x fresh equation equation') node node'
-                                  pure node'
-                              )
+                      pprTraceM "Super:" (ppr [node', node''])
+                      <|> do
+                        -- Case analysis
+                        markNodeAsLemma node
+                        case stuckOn of
+                          Nothing -> empty
+                          Just x
+                            | TyConApp dty tyargs <- idType x -> do
+                              nodes' <-
+                                casesOf dty tyargs
+                                  >>= mapM
+                                    ( \(k, fresh) -> do
+                                        scope <- asks (envInScopeSet . intoEquationEnv xs)
+                                        let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
+                                            equation' =
+                                              Equation
+                                                (fresh ++ (x `List.delete` xs))
+                                                (substExpr subst lhs)
+                                                (substExpr subst rhs)
+                                        node' <- insertNode equation'
+                                        insertEdge (caseEdge x fresh equation equation') node node'
+                                        pure node'
+                                    )
 
-                        pprTraceM "Case:" (ppr nodes')
-                      | otherwise -> empty
-              )
+                              pprTraceM "Case:" (ppr nodes')
+                            | otherwise -> empty
+                  )
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))

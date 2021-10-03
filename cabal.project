@@ -4,3 +4,5 @@ profiling-detail:all-functions
 
 package test
   optimization: False
+
+tests: True

@@ -1,7 +1,20 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 
-module Cycleq.Proof where
+-- |
+-- Module: Cycleq.Proof
+module Cycleq.Proof
+  ( Proof (..),
+    initProof,
+    Node,
+    insertNode,
+    lookupNode,
+    insertEdge,
+    markNodeAsJustified,
+    markNodeAsLemma,
+    drawProof,
+  )
+where
 
 import Control.Applicative
 import Control.Monad.Reader
