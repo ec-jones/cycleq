@@ -7,6 +7,7 @@ module Cycleq.Reduction
   ( -- * Reduction
     Reduct (..),
     reduce,
+    viewNormalForm,
   )
 where
 

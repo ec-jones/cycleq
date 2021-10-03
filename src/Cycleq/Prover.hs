@@ -1,14 +1,5 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DerivingVia #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE PartialTypeSignatures #-}
-{-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
-{-# LANGUAGE ViewPatterns #-}
 
 module Cycleq.Prover where
 
@@ -25,7 +16,7 @@ import qualified Data.List as List
 import GHC.Core.TyCo.Rep
 import GHC.Plugins hiding (empty)
 
--- | Breadth-first search for a proof.
+-- | Breadth-first search for a proof up-to a fixed depth.
 prover ::
   Equation ->
   ReaderT ProgramEnv CoreM (Maybe Proof)
@@ -42,18 +33,16 @@ prover equation = do
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
+-- | Actions in the prover monad non-deterministically manipulate a proof.
 type ProverM env = ReaderT env (StateT Proof (LogicT CoreM))
 
-firstSuccess :: MonadLogic m => [m a] -> m a
-firstSuccess [] = empty
-firstSuccess [m] =
-  msplit m >>= \case
-    Nothing -> empty
-    Just (res, alts) -> pure res <|> alts
-firstSuccess (m : ms) =
-  msplit m >>= \case
-    Nothing -> firstSuccess ms
-    Just (res, alts) -> pure res
+-- | Take just the first result from the first action.
+-- Otherwise, perform the second action.
+cut :: MonadLogic m => m a -> m a -> m a
+cut m1 m2 =
+  msplit m1 >>= \case
+    Nothing -> m2
+    Just (res, _) -> pure res
 
 -- | Expand a partial proof tree.
 step :: ProverM ProgramEnv ()
@@ -62,7 +51,7 @@ step = do
   case proofIncompleteNodes proof of
     [] -> pure ()
     (node : _) -> do
-      equation@(Equation ys lhs rhs) <- lookupNode node
+      equation@(Equation xs lhs rhs) <- lookupNode node
       markNodeAsJustified node
       pprTraceM (show node ++ ":") (ppr equation)
 
@@ -75,13 +64,13 @@ step = do
           pprTraceM "Reduct:" (ppr [node'])
           step
         Right stuckOn ->
-          firstSuccess
-            [ do
+            do
                 -- Reflexivity
                 refl equation
 
                 pprTraceM "Refl:" (ppr ([] :: [Node]))
-                step,
+                step
+          `cut`
               do
                 -- Congruence
                 equations' <- consCong equation
@@ -94,7 +83,8 @@ step = do
                     )
                     equations'
                 pprTraceM "Cong:" (ppr nodes)
-                step,
+                step
+            `cut`
               do
                 -- Function Extensionality
                 markNodeAsLemma node
@@ -103,8 +93,9 @@ step = do
                 insertEdge (identityEdge equation equation') node node'
 
                 pprTraceM "FunExt:" (ppr [node'])
-                step,
-              do
+                step
+            `cut`
+              (do
                 -- Superposition
                 -- Select a lemma node
                 node' <- gets proofLemmas >>= msum . fmap pure
@@ -129,33 +120,32 @@ step = do
                         nodes' <-
                           casesOf dty tyargs
                             >>= mapM
-                              ( \(k, xs) -> do
-                                  scope <- withReaderT (intoEquationEnv ys) (asks envInScopeSet)
-                                  -- ReductionEnv {reductionInScopeSet} <- asks (mkReductionEnv (equationVars equation))
-                                  let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs xs)]
+                              ( \(k, fresh) -> do
+                                  scope <- asks (envInScopeSet . intoEquationEnv xs)
+                                  let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
                                       equation' =
                                         Equation
-                                          (xs ++ (x `List.delete` ys))
+                                          (fresh ++ (x `List.delete` xs))
                                           (substExpr subst lhs)
                                           (substExpr subst rhs)
                                   node' <- insertNode equation'
-                                  insertEdge (caseEdge x xs equation equation') node node'
+                                  insertEdge (caseEdge x fresh equation equation') node node'
                                   pure node'
                               )
 
                         pprTraceM "Case:" (ppr nodes')
                       | otherwise -> empty
-            ]
+              )
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
 reduceEquation (Equation xs lhs rhs) = withReaderT (intoEquationEnv xs) $ do
-  lhs <- reduce lhs
-  rhs <- reduce rhs
+  lhs' <- reduce lhs
+  rhs' <- reduce rhs
   pure $
-    if reductIsProper lhs || reductIsProper rhs
-      then Left (Equation xs (reductExpr lhs) (reductExpr rhs))
-      else Right (reductStuckOn lhs <|> reductStuckOn rhs)
+    if reductIsProper lhs' || reductIsProper rhs'
+      then Left (Equation xs (reductExpr lhs') (reductExpr rhs'))
+      else Right (reductStuckOn lhs' <|> reductStuckOn rhs')
 
 -- | Reflexivity
 refl :: Equation -> ProverM ProgramEnv ()
@@ -165,11 +155,13 @@ refl (Equation xs lhs rhs) = do
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
 consCong :: Equation -> ProverM env [Equation]
-consCong (Equation xs (ConApp con (filter isValArg -> args)) (ConApp con' (filter isValArg -> args')))
-  | con == con' = pure (zipWith (Equation xs) args args')
-consCong (Equation _ (Lit' lit) (Lit' lit'))
-  | lit == lit' = pure []
-consCong _ = empty
+consCong (Equation xs lhs rhs) =
+  case (,) <$> viewNormalForm lhs <*> viewNormalForm rhs of
+    Just (Left (con, args), Left (con', args'))
+      | con == con' -> pure (zipWith (Equation xs) args args')
+    Just (Right lit, Right lit')
+      | lit == lit' -> pure []
+    nonMatch -> empty -- TODO: Differentiate between inapplicability and absurdity.
 
 -- | Create a fresh variable as an argument to both sides.
 funExt :: Equation -> ProverM env Equation
@@ -195,7 +187,7 @@ freshVar ty = do
 -- | Rewrite the first equation with an instance of the second.
 superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
 superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
-  scope <- withReaderT (intoEquationEnv xs) (asks envInScopeSet)
+  scope <- asks (envInScopeSet . intoEquationEnv xs)
   sub <- equationSubExprs goal
   guard (not (isVariableSubExpr sub))
   withSubExpr sub $ \expr ->
@@ -244,32 +236,3 @@ match univs scope expr1 expr2 = do
             zipWithM_ go defns1 defns2
             go body1 body2
     go _ _ = empty
-
--- | Core expressions that are the application of a data constructor to several arguments.
-pattern ConApp :: DataCon -> [CoreArg] -> CoreExpr
-pattern ConApp con args <-
-  (viewConApp -> Just (con, args))
-  where
-    ConApp con args = mkCoreConApps con args
-
-viewConApp :: CoreExpr -> Maybe (DataCon, [CoreArg])
-viewConApp = go [] []
-  where
-    go binds args (Var x) = do
-      con <- isDataConWorkId_maybe x
-      pure (con, fmap (\arg -> foldr Let arg binds) args)
-    go binds args (App fun arg) = go binds (arg : args) fun
-    go binds [] (Let bind body) = go (bind : binds) [] body
-    go _ _ _ = Nothing
-
--- | Core expressions that are literals under a number of let-bindings.
-pattern Lit' :: Literal -> CoreExpr
-pattern Lit' lit <-
-  (viewLit -> Just lit)
-  where
-    Lit' lit = Lit lit
-
-viewLit :: CoreExpr -> Maybe Literal
-viewLit (Lit lit) = Just lit
-viewLit (Let _ body) = viewLit body
-viewLit _ = Nothing

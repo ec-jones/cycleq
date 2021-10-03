@@ -1,7 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE NamedFieldPuns #-}
 
 module Cycleq.Proof where
 
@@ -43,16 +41,6 @@ data Proof = Proof
   }
 
 -- | An initial proof with a set of lemmas and no edges.
-emptyProof :: [Equation] -> Proof
-emptyProof lemmas =
-  Proof
-    { proofNodes = IntMap.fromList (zip [0 ..] lemmas),
-      proofEdges = IntMap.empty,
-      proofIncompleteNodes = [],
-      proofLemmas = [0 .. length lemmas - 1]
-    }
-
--- | An initial proof with a set of lemmas and no edges.
 initProof :: [Equation] -> [Equation] -> Proof
 initProof lemmas goals =
   Proof
@@ -65,21 +53,21 @@ initProof lemmas goals =
 -- | Insert a equation into a proof and return the new node's index.
 insertNode :: MonadState Proof m => Equation -> m Node
 insertNode equation = do
-  proof@Proof {proofNodes, proofIncompleteNodes} <- get
-  case IntMap.lookupMax proofNodes of
+  proof <- get
+  case IntMap.lookupMax (proofNodes proof) of
     Nothing -> do
       put
         ( proof
             { proofNodes = IntMap.singleton 0 equation,
-              proofIncompleteNodes = List.insert 0 proofIncompleteNodes
+              proofIncompleteNodes = List.insert 0 (proofIncompleteNodes proof)
             }
         )
       pure 0
     Just (n, _) -> do
       put
         ( proof
-            { proofNodes = IntMap.insert (n + 1) equation proofNodes,
-              proofIncompleteNodes = List.insert (n + 1) proofIncompleteNodes
+            { proofNodes = IntMap.insert (n + 1) equation (proofNodes proof),
+              proofIncompleteNodes = List.insert (n + 1) (proofIncompleteNodes proof)
             }
         )
       pure (n + 1)
@@ -87,14 +75,14 @@ insertNode equation = do
 -- | Mark a node as justified.
 markNodeAsJustified :: MonadState Proof m => Node -> m ()
 markNodeAsJustified node = modify $
-  \proof@Proof {proofIncompleteNodes} ->
-    proof {proofIncompleteNodes = List.delete node proofIncompleteNodes}
+  \proof ->
+    proof {proofIncompleteNodes = List.delete node (proofIncompleteNodes proof)}
 
 -- | Mark a node as suitable for superposition.
 markNodeAsLemma :: MonadState Proof m => Node -> m ()
 markNodeAsLemma node = modify $
-  \proof@Proof {proofLemmas} ->
-    proof {proofLemmas = List.insert node proofLemmas}
+  \proof ->
+    proof {proofLemmas = List.insert node (proofLemmas proof)}
 
 -- | Get the equation of a given node.
 lookupNode :: MonadState Proof m => Node -> m Equation
@@ -109,11 +97,11 @@ insertEdge :: (Alternative m, MonadState Proof m) => Edge -> Node -> Node -> m (
 insertEdge edge source target
   | source == target, not (isWellFounded edge) = empty
   | otherwise = do
-    proof@Proof {proofEdges} <- get
-    let (change, edges) = alterAdjMap alterEdge source target proofEdges
+    proof <- get
+    let (change, edges) = alterAdjMap alterEdge source target (proofEdges proof)
     put (proof {proofEdges = edges})
     when change $
-      close proofEdges
+      close edges
   where
     alterEdge Nothing = (True, edge)
     alterEdge (Just edge')

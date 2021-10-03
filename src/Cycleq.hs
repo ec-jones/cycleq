@@ -45,7 +45,7 @@ plugin =
             pure mguts
         )
 
--- | Clean up core expressions.
+-- | Clean up core expressions by removing ticks and checking they can be handled.
 cleanCore :: CoreExpr -> CoreExpr
 cleanCore (Var x) = Var x
 cleanCore (Lit lit) = Lit lit
@@ -53,10 +53,7 @@ cleanCore expr@(App _ _) =
   case collectArgs expr of
     (Let _ _, args)
       | not (null args) -> 
-        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr) 
-    (Case {}, args) 
-      | not (null args) -> 
-        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr) 
+        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr)  
     (fun, args) -> mkApps (cleanCore fun) (map cleanCore args)
 cleanCore (Lam x body) = Lam x (cleanCore body)
 cleanCore (Let bind body) = Let (cleanBind bind) (cleanCore body)
