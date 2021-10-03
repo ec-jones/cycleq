@@ -20,6 +20,10 @@ import GHC.Plugins hiding (empty)
 
 -- * Reduction
 
+-- type Reduct = (CoreExpr, R)
+
+-- type R = (Maybe Id, Bool)
+
 -- | A reduced core expression.
 data Reduct = Reduct
   { reductExpr :: CoreExpr,
@@ -68,8 +72,9 @@ reduce expr = handler (go False expr [])
     go notProper (Lit lit) args = pure (mkApps (Lit lit) args)
     go notProper (App fun arg) args = do
       arg' <- censor (const mempty) (go True arg []) -- Call-by-value stategy
-      go notProper fun (arg' : args)
-    go notProper (Lam x body) [] = empty
+      go True fun (arg' : args) -- TODO: Check if arg has been reduced.
+    go notProper (Lam x body) [] =
+      local _ $ go notProper body []
     go notProper (Lam x body) (arg : args) = do
       scope <- asks envInScopeSet
       let subst = mkOpenSubst scope [(x, arg)]
