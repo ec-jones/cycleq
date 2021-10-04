@@ -6,7 +6,8 @@ module Cycleq.Environment
     mkProgramEnv,
     EquationEnv (envFreeVars, envBoundVars, envInScopeSet),
     intoEquationEnv,
-    extendEquationEnv,
+    extendBoundVars,
+    extendFreeVars
   )
 where
 
@@ -36,11 +37,19 @@ data EquationEnv = EquationEnv
   }
 
 -- | Extend an equation environment with a local bind.
-extendEquationEnv :: CoreBind -> EquationEnv -> EquationEnv
-extendEquationEnv bind env =
+extendBoundVars :: CoreBind -> EquationEnv -> EquationEnv
+extendBoundVars bind env =
   env
     { envBoundVars = extendVarEnvList (envBoundVars env) (flattenBinds [bind]),
       envInScopeSet = extendInScopeSetList (envInScopeSet env) (bindersOf bind)
+    }
+
+-- | Extend an equation environment with a free variable.
+extendFreeVars :: Id -> EquationEnv -> EquationEnv
+extendFreeVars x env =
+  env
+    { envFreeVars = extendVarSet (envFreeVars env) x,
+      envInScopeSet = extendInScopeSet (envInScopeSet env) x
     }
 
 -- | Extend the prover environment with the free variables of an equation.

@@ -1,101 +1,80 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- |
 -- Module: Cycleq.Reduction
 module Cycleq.Reduction
   ( -- * Reduction
-    Reduct (..),
+    ReductT,
+    runReductT,
     reduce,
     viewNormalForm,
   )
 where
 
-import Control.Monad.Writer
+import Control.Applicative
 import Control.Monad.Reader
 import Cycleq.Environment
-import GHC.Data.Maybe
-import Control.Applicative
 import GHC.Plugins hiding (empty)
-
 -- * Reduction
 
--- type Reduct = (CoreExpr, R)
-
--- type R = (Maybe Id, Bool)
-
--- | A reduced core expression.
-data Reduct = Reduct
-  { reductExpr :: CoreExpr,
-    reductIsProper :: Bool,
-    reductStuckOn :: Maybe Id
-  }
-
 -- | Reduce a core expression as far as possible.
-reduce :: forall m. MonadReader EquationEnv m => CoreExpr -> m Reduct
-reduce expr = handler (go False expr [])
+reduce :: forall m. MonadReader EquationEnv m => CoreExpr -> ReductT m CoreExpr
+reduce expr = go expr []
   where
-    -- Produce a 'Reduct' from an effectful expression.
-    -- Failure is interpreted as a non-proper reduction
-    -- The Writer records which variable is preventing further reduction.
-    handler :: MaybeT (WriterT (First Id) m) CoreExpr -> m Reduct
-    handler m = do
-      (expr', First x) <- runWriterT (runMaybeT m)
-      pure
-        Reduct
-          { reductExpr = fromMaybe expr expr',
-            reductIsProper = isJust expr',
-            reductStuckOn = x
-          }
-
     -- Reduce a core expression under a series of arguments.
-    -- Non-proper reducts are permited if @notProper@ is set.
-    go :: Bool -> CoreExpr -> [CoreArg] -> MaybeT (WriterT (First Id) m) CoreExpr
-    go notProper (Var x) args = do
+    go :: CoreExpr -> [CoreArg] -> ReductT m CoreExpr
+    go (Var x) args = do
       env <- ask
       case lookupVarEnv (envBoundVars env) x of
         Nothing
-          | isDataConWorkId x -> do
-            guard notProper
+          | isDataConWorkId x ->
             pure (mkApps (Var x) args)
           | elemVarSet x (envFreeVars env) -> do
-            guard notProper
-            tell (First (Just x)) -- Mark x as preventing reduction
+            stuckOn x 
             pure (mkApps (Var x) args)
           | otherwise -> pprPanic "Variable not in scope!" (ppr x)
         Just defn ->
-          go True defn args
-            <|> ( do
-                    guard notProper
-                    pure (mkApps (Var x) args)
-                )
-    go notProper (Lit lit) args = pure (mkApps (Lit lit) args)
-    go notProper (App fun arg) args = do
-      arg' <- censor (const mempty) (go True arg []) -- Call-by-value stategy
-      go True fun (arg' : args) -- TODO: Check if arg has been reduced.
-    go notProper (Lam x body) [] =
-      local _ $ go notProper body []
-    go notProper (Lam x body) (arg : args) = do
+          ( do
+              isProper
+              go defn args
+          )
+            <|> pure (mkApps (Var x) args)
+    go (Lit lit) args = pure (mkApps (Lit lit) args)
+    go (App fun arg) args = do
+      -- Full-beta stategy
+      arg' <- notNeeded (go arg [])
+      go fun (arg' : args)
+    go (Lam x body) [] =
+      -- Full-beta stategy
+      Lam x <$> local (extendFreeVars x) (notNeeded $ go body [])
+    go (Lam x body) (arg : args) = do
+      isProper
       scope <- asks envInScopeSet
       let subst = mkOpenSubst scope [(x, arg)]
-      go True (substExpr subst body) args
-    go notProper (Let bind body) [] =
-      Let bind <$> local (extendEquationEnv bind) (go notProper body [])
-    go notProper (Case scrut x ty alts) args = do
-      scrut' <- go True scrut []
+      go (substExpr subst body) args
+    go (Let bind body) [] =
+      Let bind <$> local (extendBoundVars bind) (go body [])
+    go (Case scrut x ty alts) args = do
+      scrut' <- go scrut []
       case viewNormalForm scrut' of
         Just (Left (con, conArgs))
           | Just (_, patVars, rhs) <- findAlt (DataAlt con) alts -> do
+            isProper
             scope <- asks envInScopeSet
             let subst = mkOpenSubst scope ((x, scrut') : zip patVars conArgs)
-            go True (substExpr subst rhs) args
+            go (substExpr subst rhs) args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Just (Right lit)
           | Just (_, [], rhs) <- findAlt (LitAlt lit) alts -> do
-            go True rhs args
+            isProper
+            go rhs args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Nothing -> empty
-    go notProper expr' args =
+    go expr' args =
       pprPanic "Unsupproted expression!" (ppr (mkApps expr' args))
 
 -- | Match a core expression against a first-order normal form.
@@ -113,3 +92,91 @@ viewNormalForm = go [] []
       | otherwise = go binds args fun
     go binds [] (Let bind body) = go (bind : binds) [] body
     go _ _ _ = Nothing
+
+
+-- * Reduction Monad
+
+-- | The reduction monad records if progress has been made
+-- and which variable prevents further progress.
+newtype ReductT m a = ReductT
+  { unReductT :: m (Maybe (a, Bool), Maybe Id)
+  }
+
+instance Monad m => Functor (ReductT m) where
+  fmap f m = ReductT $ do
+    (res, x) <- unReductT m
+    case res of
+      Nothing -> pure (Nothing, x)
+      Just (a, p) -> pure (Just (f a, p), x)
+      
+instance Monad m => Applicative (ReductT m) where
+  pure x = ReductT $ pure (Just (x, False), Nothing)
+
+  m1 <*> m2 = ReductT $ do
+    (res1, x) <- unReductT m1
+    (res2, y) <- unReductT m2
+    case res1 of
+      Nothing -> pure (Nothing, x <|> y)
+      Just (f, p) ->
+        case res2 of
+          Nothing -> pure (Nothing, x <|> y)
+          Just (a, q) -> pure (Just (f a, p || q), x <|> y)
+
+instance Monad m => Monad (ReductT m) where
+  return x = ReductT $ pure (Just (x, False), Nothing)
+
+  m >>= f = ReductT $ do
+    (res, x) <- unReductT m
+    case res of
+      Nothing -> pure (Nothing, x)
+      Just (a, p) -> do
+        (res', y) <- unReductT (f a)
+        case res' of
+          Nothing -> pure (Nothing, x <|> y)
+          Just (b, q) -> pure (Just (b, p || q), x <|> y)
+
+instance Monad m => MonadPlus (ReductT m) where
+  mzero = ReductT $ pure (Nothing, Nothing)
+
+  mplus m1 m2 = ReductT $ do
+    (res1, x1) <- unReductT m1
+    (res2, x2) <- unReductT m2
+    pure (res1 <|> res2, x1 <|> x2)
+    
+instance Monad m => Alternative (ReductT m) where
+  empty = ReductT $ pure (Nothing, Nothing)
+
+  m1 <|> m2 = ReductT $ do
+    (res1, x1) <- unReductT m1
+    (res2, x2) <- unReductT m2
+    pure (res1 <|> res2, x1 <|> x2)
+
+
+instance MonadReader env m => MonadReader env (ReductT m) where
+  ask = ReductT $ do
+    env <- ask
+    pure (Just (env, False), Nothing)
+
+  local f m = ReductT $ local f $ unReductT m
+
+-- | Evaluate a reduct action.
+runReductT :: MonadPlus m => ReductT m a -> m (a, Bool, Maybe Id)
+runReductT m = do
+  (res, x) <- unReductT m
+  case res of
+    Nothing -> empty
+    Just (a, p) -> pure (a, p, x)
+
+-- | Mark a variable as preventing progress.
+stuckOn :: Monad m => Id -> ReductT m ()
+stuckOn x = ReductT $ pure (Just ((), False), Just x)
+
+-- | Supress stuckOn.
+notNeeded :: Monad m => ReductT m a -> ReductT m a
+notNeeded m = ReductT $ do
+  (res, x) <- unReductT m
+  pure (res, Nothing)
+
+-- | Mark a proper reduction step.
+isProper :: Monad m => ReductT m ()
+isProper = ReductT $ pure (Just ((), True), Nothing)

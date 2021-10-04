@@ -55,11 +55,14 @@ step = do
     [] -> pure ()
     (node : _) -> do
       equation@(Equation xs lhs rhs) <- lookupNode node
+      -- TODO: Check if equation is absurd
+
       markNodeAsJustified node
       pprTraceM (show node ++ ":") (ppr equation)
 
       reduceEquation equation >>= \case
         Left equation' -> do
+          -- TODO: Check if equation is absurd
           -- Reduce
           node' <- insertNode equation'
           insertEdge (identityEdge equation equation') node node'
@@ -140,12 +143,14 @@ step = do
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
 reduceEquation (Equation xs lhs rhs) = withReaderT (intoEquationEnv xs) $ do
-  lhs' <- reduce lhs
-  rhs' <- reduce rhs
+  (equation, isProper, stuckOn) <- runReductT $ do
+        lhs' <- reduce lhs
+        rhs' <- reduce rhs
+        pure (Equation xs lhs' rhs')
   pure $
-    if reductIsProper lhs' || reductIsProper rhs'
-      then Left (Equation xs (reductExpr lhs') (reductExpr rhs'))
-      else Right (reductStuckOn lhs' <|> reductStuckOn rhs')
+    if isProper
+      then Left equation
+      else Right stuckOn
 
 -- | Reflexivity
 refl :: Equation -> ProverM ProgramEnv ()
@@ -161,7 +166,7 @@ consCong (Equation xs lhs rhs) =
       | con == con' -> pure (zipWith (Equation xs) args args')
     Just (Right lit, Right lit')
       | lit == lit' -> pure []
-    nonMatch -> empty -- TODO: Differentiate between inapplicability and absurdity.
+    nonMatch -> empty
 
 -- | Create a fresh variable as an argument to both sides.
 funExt :: Equation -> ProverM env Equation
