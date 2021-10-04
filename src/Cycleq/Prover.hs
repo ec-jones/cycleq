@@ -54,27 +54,27 @@ step = do
   case proofIncompleteNodes proof of
     [] -> pure ()
     (node : _) -> do
-      equation@(Equation xs lhs rhs) <- lookupNode node
+      let equation@(Equation xs lhs rhs) = nodeEquation node
       -- TODO: Check if equation is absurd
 
       markNodeAsJustified node
-      pprTraceM (show node ++ ":") (ppr equation)
+      -- pprTraceM (show node ++ ":") (ppr equation)
 
       reduceEquation equation >>= \case
         Left equation' -> do
           -- TODO: Check if equation is absurd
           -- Reduce
           node' <- insertNode equation'
-          insertEdge (identityEdge equation equation') node node'
+          insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
 
-          pprTraceM "Reduct:" (ppr [node'])
+          -- pprTraceM "Reduct:" (ppr [node'])
           step
         Right stuckOn ->
           do
             -- Reflexivity
             refl equation
 
-            pprTraceM "Refl:" (ppr ([] :: [Node]))
+            -- pprTraceM "Refl:" (ppr ([] :: [Node]))
             step
             `cut` do
               -- Congruence
@@ -83,36 +83,36 @@ step = do
                 mapM
                   ( \equation' -> do
                       node' <- insertNode equation'
-                      insertEdge (identityEdge equation equation') node node'
+                      insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
                       pure node'
                   )
                   equations'
-              pprTraceM "Cong:" (ppr nodes)
+              -- pprTraceM "Cong:" (ppr nodes)
               step
             `cut` do
               -- Function Extensionality
               markNodeAsLemma node
               equation' <- funExt equation
               node' <- insertNode equation'
-              insertEdge (identityEdge equation equation') node node'
+              insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
 
-              pprTraceM "FunExt:" (ppr [node'])
+              -- pprTraceM "FunExt:" (ppr [node'])
               step
             `cut` ( do
                       -- Superposition
                       -- Select a lemma node
                       node' <- gets proofLemmas >>= msum . fmap pure
-                      equation' <- lookupNode node'
+                      let equation' = nodeEquation node'
 
                       -- Rewrite current goal
                       (subst, equation'') <- superpose equation equation'
                       node'' <- insertNode equation''
 
                       -- Add edges
-                      insertEdge (identityEdge equation equation'') node node''
-                      insertEdge (substEdge subst equation equation') node node'
+                      insertEdge (identityEdge equation equation'') (nodeId node) (nodeId node'')
+                      insertEdge (substEdge subst equation equation') (nodeId node) (nodeId node')
 
-                      pprTraceM "Super:" (ppr [node', node''])
+                      -- pprTraceM "Super:" (ppr [node', node''])
                       <|> do
                         -- Case analysis
                         markNodeAsLemma node
@@ -132,11 +132,12 @@ step = do
                                                 (substExpr subst lhs)
                                                 (substExpr subst rhs)
                                         node' <- insertNode equation'
-                                        insertEdge (caseEdge x fresh equation equation') node node'
+                                        insertEdge (caseEdge x fresh equation equation') (nodeId node) (nodeId node')
                                         pure node'
                                     )
 
-                              pprTraceM "Case:" (ppr nodes')
+                              pure ()
+                              -- pprTraceM "Case:" (ppr nodes')
                             | otherwise -> empty
                   )
 

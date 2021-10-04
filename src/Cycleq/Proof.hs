@@ -4,11 +4,10 @@
 -- |
 -- Module: Cycleq.Proof
 module Cycleq.Proof
-  ( Proof (..),
+  ( Node (..),
+    Proof (..),
     initProof,
-    Node,
     insertNode,
-    lookupNode,
     insertEdge,
     markNodeAsJustified,
     markNodeAsLemma,
@@ -33,13 +32,22 @@ import System.IO
 import System.Process
 
 -- | A node in a pre-proof graph
-type Node = IntMap.Key
+data Node = Node
+  { nodeId :: IntMap.Key,
+    nodeEquation :: Equation
+  }
+
+instance Eq Node where
+  n == m = nodeId n == nodeId m
+
+instance Ord Node where
+  n <= m = nodeId n <= nodeId m
 
 -- | Each node is associated with a map from it's successors to edge weights.
 type AdjMap = IntMap.IntMap (IntMap.IntMap Edge)
 
 -- | Modify an edge in an adjacency map.
-alterAdjMap :: Functor f => (Maybe Edge -> f Edge) -> Node -> Node -> AdjMap -> f AdjMap
+alterAdjMap :: Functor f => (Maybe Edge -> f Edge) -> IntMap.Key -> IntMap.Key -> AdjMap -> f AdjMap
 alterAdjMap go source target =
   IntMap.alterF (fmap Just . IntMap.alterF (fmap Just . go) target . fromMaybe IntMap.empty) source
 
@@ -59,31 +67,25 @@ initProof lemmas goals =
   Proof
     { proofNodes = IntMap.fromList (zip [0 ..] (lemmas ++ goals)),
       proofEdges = IntMap.empty,
-      proofIncompleteNodes = [length lemmas .. length goals - 1],
-      proofLemmas = [0 .. length lemmas - 1]
+      proofIncompleteNodes = zipWith Node [length lemmas ..] goals,
+      proofLemmas = zipWith Node [0 ..] lemmas
     }
 
 -- | Insert a equation into a proof and return the new node's index.
 insertNode :: MonadState Proof m => Equation -> m Node
 insertNode equation = do
   proof <- get
-  case IntMap.lookupMax (proofNodes proof) of
-    Nothing -> do
-      put
-        ( proof
-            { proofNodes = IntMap.singleton 0 equation,
-              proofIncompleteNodes = List.insert 0 (proofIncompleteNodes proof)
-            }
-        )
-      pure 0
-    Just (n, _) -> do
-      put
-        ( proof
-            { proofNodes = IntMap.insert (n + 1) equation (proofNodes proof),
-              proofIncompleteNodes = List.insert (n + 1) (proofIncompleteNodes proof)
-            }
-        )
-      pure (n + 1)
+  let node = 
+            case IntMap.lookupMax (proofNodes proof) of
+              Nothing -> Node 0 equation
+              Just (n, _) -> Node (n + 1) equation
+  put
+    ( proof
+        { proofNodes = IntMap.singleton (nodeId node) equation,
+          proofIncompleteNodes = List.insert node (proofIncompleteNodes proof)
+        }
+    )
+  pure node
 
 -- | Mark a node as justified.
 markNodeAsJustified :: MonadState Proof m => Node -> m ()
@@ -97,16 +99,8 @@ markNodeAsLemma node = modify $
   \proof ->
     proof {proofLemmas = List.insert node (proofLemmas proof)}
 
--- | Get the equation of a given node.
-lookupNode :: MonadState Proof m => Node -> m Equation
-lookupNode node = do
-  proof <- get
-  case IntMap.lookup node (proofNodes proof) of
-    Nothing -> pprPanic "Node not in graph!" (ppr node)
-    Just equation -> return equation
-
 -- | Insert an edge into a proof and returns False if this creates a bad cycle.
-insertEdge :: (Alternative m, MonadState Proof m) => Edge -> Node -> Node -> m ()
+insertEdge :: (Alternative m, MonadState Proof m) => Edge -> IntMap.Key -> IntMap.Key -> m ()
 insertEdge edge source target
   | source == target, not (isWellFounded edge) = empty
   | otherwise = do

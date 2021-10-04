@@ -93,7 +93,6 @@ viewNormalForm = go [] []
     go binds [] (Let bind body) = go (bind : binds) [] body
     go _ _ _ = Nothing
 
-
 -- * Reduction Monad
 
 -- | The reduction monad records if progress has been made
@@ -121,6 +120,14 @@ instance Monad m => Applicative (ReductT m) where
         case res2 of
           Nothing -> pure (Nothing, x <|> y)
           Just (a, q) -> pure (Just (f a, p || q), x <|> y)
+    
+instance Monad m => Alternative (ReductT m) where
+  empty = ReductT $ pure (Nothing, Nothing)
+
+  m1 <|> m2 = ReductT $ do
+    (res1, x1) <- unReductT m1
+    (res2, x2) <- unReductT m2
+    pure (res1 <|> res2, x1 <|> x2)
 
 instance Monad m => Monad (ReductT m) where
   return x = ReductT $ pure (Just (x, False), Nothing)
@@ -134,23 +141,6 @@ instance Monad m => Monad (ReductT m) where
         case res' of
           Nothing -> pure (Nothing, x <|> y)
           Just (b, q) -> pure (Just (b, p || q), x <|> y)
-
-instance Monad m => MonadPlus (ReductT m) where
-  mzero = ReductT $ pure (Nothing, Nothing)
-
-  mplus m1 m2 = ReductT $ do
-    (res1, x1) <- unReductT m1
-    (res2, x2) <- unReductT m2
-    pure (res1 <|> res2, x1 <|> x2)
-    
-instance Monad m => Alternative (ReductT m) where
-  empty = ReductT $ pure (Nothing, Nothing)
-
-  m1 <|> m2 = ReductT $ do
-    (res1, x1) <- unReductT m1
-    (res2, x2) <- unReductT m2
-    pure (res1 <|> res2, x1 <|> x2)
-
 
 instance MonadReader env m => MonadReader env (ReductT m) where
   ask = ReductT $ do
