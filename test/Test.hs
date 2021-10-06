@@ -26,8 +26,13 @@ add :: Nat -> Nat -> Nat
 add Zero     y = y
 add (Succ x) y = Succ (add x y)
 
-goal_mapId :: Equation
-goal_mapId = map id ≃ id
+drop :: Nat -> List a -> List a
+drop _ Nil = Nil
+drop Zero (Cons x xs) = Cons x xs
+drop (Succ n) (Cons x xs) = drop n xs
+
+-- goal_mapId :: Equation
+-- goal_mapId = map id ≃ id
 
 -- goal_addZero :: Nat -> Equation
 -- goal_addZero x = add x Zero ≃ x
@@ -37,3 +42,6 @@ goal_mapId = map id ≃ id
 
 -- goal_addAssoc :: Nat -> Nat -> Nat -> Equation
 -- goal_addAssoc x y z = add x (add y z) ≃ add (add x y) z
+
+goal_dropMap :: Nat -> (a -> b) -> List a -> Equation
+goal_dropMap n f xs = drop n (map f xs) ≃ map f (drop n xs)

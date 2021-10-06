@@ -36,11 +36,7 @@ data Equation
 
 instance Outputable Equation where
   ppr (Equation xs lhs rhs) =
-    -- Suppress type applications
-    updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
-      -- Never qualify names
-      withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
-        pprUserExpr id lhs <+> char '≃' <+> pprUserExpr id rhs
+    pprUserExpr id lhs <+> char '≃' <+> pprUserExpr id rhs
 
 -- | Print an equation with explicit variable quantification.
 pprQualified :: Equation -> SDoc

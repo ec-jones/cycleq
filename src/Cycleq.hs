@@ -35,7 +35,7 @@ plugin =
       CoreDoPluginPass
         "Cycleq"
         ( \mguts -> do
-            let prog = map cleanBind (mg_binds mguts)
+            let prog = cleanProg (mg_binds mguts)
             case [ (x', defn)
                    | (x, defn) <- flattenBinds prog,
                      Just x' <- pure ("goal_" `List.stripPrefix` occNameString (occName x))
@@ -52,23 +52,33 @@ plugin =
             pure mguts
         )
 
--- | Clean up core expressions by removing ticks and checking they can be handled.
-cleanCore :: CoreExpr -> CoreExpr
-cleanCore (Var x) = Var x
-cleanCore (Lit lit) = Lit lit
-cleanCore (App fun arg) = App (cleanCore fun) (cleanCore arg)
-cleanCore (Lam x body) = Lam x (cleanCore body)
-cleanCore (Let bind body) = Let (cleanBind bind) (cleanCore body)
-cleanCore (Case scrut x ty cases) = Case (cleanCore scrut) x ty (map cleanAlt cases)
-cleanCore (Tick _ expr) = cleanCore expr
-cleanCore (Type ty) = Type ty
-cleanCore expr = pprSorry "Casts and coercions are not yet supported!" (ppr expr)
+-- | Clean up a core program by removing ticks and join points.
+-- N.B. This function fails on unsuported expressions like casts and coercions.
+cleanProg :: CoreProgram -> CoreProgram
+cleanProg prog = map goBind prog 
+  where
+    scope :: InScopeSet
+    scope = mkInScopeSet $ mkVarSet $ bindersOfBinds prog
 
--- | Clean up core binds.
-cleanBind :: CoreBind -> CoreBind
-cleanBind (NonRec x defn) = NonRec x (cleanCore defn)
-cleanBind (Rec defns) = Rec (map (second cleanCore) defns)
+    go :: CoreExpr -> CoreExpr
+    go (Var x) = Var x
+    go (Lit lit) = Lit lit
+    go (App fun arg) = App (go fun) (go arg)
+    go (Lam x body) = Lam x (go body)
+    go (Let bind@(NonRec x defn) body)
+      | Just _ <- bndrIsJoin_maybe x =
+        -- Inline join points
+        let subst = mkOpenSubst scope [(x, defn)]
+         in go (substExpr subst body)
+    go (Let bind body) = Let (goBind bind) (go body)
+    go (Case scrut x ty cases) = Case (go scrut) x ty (map goAlt cases)
+    go (Tick _ expr) = go expr
+    go (Type ty) = Type ty
+    go expr = pprSorry "Casts and coercions are not yet supported!" (ppr expr)
 
--- | Clean up case alternative.
-cleanAlt :: CoreAlt -> CoreAlt
-cleanAlt (ac, xs, rhs) = (ac, xs, cleanCore rhs)
+    goBind :: CoreBind -> CoreBind
+    goBind (NonRec x defn) = NonRec x (go defn)
+    goBind (Rec defns) = Rec (map (second go) defns)
+
+    goAlt :: CoreAlt -> CoreAlt
+    goAlt (ac, xs, rhs) = (ac, xs, go rhs)
