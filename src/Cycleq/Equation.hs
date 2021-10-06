@@ -40,7 +40,7 @@ instance Outputable Equation where
     updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
       -- Never qualify names
       withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
-        pprUserExpr lhs <+> char '≃' <+> pprUserExpr rhs
+        pprUserExpr id lhs <+> char '≃' <+> pprUserExpr id rhs
 
 -- | Print an equation with explicit variable quantification.
 pprQualified :: Equation -> SDoc
@@ -49,9 +49,26 @@ pprQualified eq@(Equation xs _ _)
   | otherwise = ppr eq
 
 -- | Print CoreExpr compactly without metadata.
-pprUserExpr :: CoreExpr -> SDoc
-pprUserExpr (Let bind body) = ppr body
-pprUserExpr expr = ppr expr
+pprUserExpr :: (SDoc -> SDoc) -> CoreExpr -> SDoc
+pprUserExpr f (Var x) = ppr (occName x)
+pprUserExpr f (Lit lit) = pprLiteral f lit
+pprUserExpr f expr@(Lam _ _) =
+  let (_, bndrs, body) = collectTyAndValBinders expr
+      bndrs' = filter isId bndrs
+   in f $
+        hang
+          (char 'λ' GHC.Plugins.<> interppSP (map occName bndrs') <+> char '→')
+          2
+          (pprUserExpr id body)
+pprUserExpr f expr@(App _ _) =
+  let (fun, args) = collectArgs expr
+      args' = filter isValArg args
+      ppArgs = sep (map (pprUserExpr parens) args')
+   in if null args'
+        then pprUserExpr id fun
+        else f $ hang (pprUserExpr parens fun) 2 ppArgs
+pprUserExpr f (Let _ expr) = pprUserExpr f expr
+pprUserExpr _ expr = pprPanic "Unsupported expression" (ppr expr)
 
 -- | Construct an equation from a core expression of the form @\\x1 ... xn -> lhs ≃ rhs@.
 equationFromCore :: CoreExpr -> Maybe Equation

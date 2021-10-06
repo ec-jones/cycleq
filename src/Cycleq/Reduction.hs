@@ -57,10 +57,14 @@ reduce expr = go expr []
       scope <- asks envInScopeSet
       let subst = mkOpenSubst scope [(x, arg)]
       go (substExpr subst body) args
-    go (Let bind body) args = do
-      (bind', subst) <- freshenBind bind
-      body' <- local (extendBoundVars bind') $ go (substExpr subst body) args
-      pure (Let bind' body')
+    go (Let bind body) args
+      | null args = do
+        body' <- local (extendBoundVars bind) $ go body args
+        pure (Let bind body')
+      | otherwise = do
+        (bind', subst) <- freshenBind bind
+        body' <- local (extendBoundVars bind') $ go (substExpr subst body) args
+        pure (Let bind' body')
     go (Case scrut x ty alts) args = do
       scrut' <- go scrut []
       case viewNormalForm scrut' of

@@ -7,13 +7,14 @@ module Cycleq
   )
 where
 
-import Cycleq.Prover
-import Cycleq.Equation
-import Data.Maybe
-import Cycleq.Proof
 import Control.Monad.Reader
-import Data.Bifunctor
 import Cycleq.Environment
+import Cycleq.Equation
+import Cycleq.Proof
+import Cycleq.Prover
+import Data.Bifunctor
+import qualified Data.List as List
+import Data.Maybe
 import GHC.Plugins hiding (empty)
 
 -- | Construct an equation between two terms.
@@ -35,18 +36,19 @@ plugin =
         "Cycleq"
         ( \mguts -> do
             let prog = map cleanBind (mg_binds mguts)
-            case [ defn
+            case [ (x', defn)
                    | (x, defn) <- flattenBinds prog,
-                     getOccName (getName x) == mkVarOcc "prop"
+                     Just x' <- pure ("goal_" `List.stripPrefix` occNameString (occName x))
                  ] of
-              [] -> pure ()
-              (main : _) -> do
-                let equation = fromJust $ equationFromCore main
+              [] -> putMsgS "Couldn't find a goal!"
+              goals -> forM_ goals $ \(x, goal) -> do
+                putMsgS ("Attempting to prove: " ++ x)
+                let equation = fromJust $ equationFromCore goal
                 runReaderT (prover equation) (mkProgramEnv prog) >>= \case
                   Nothing -> putMsgS "Failure!"
                   Just proof -> do
                     putMsgS "Success!"
-                    drawProof proof "proof.svg"
+                    drawProof proof ("proof_" ++ x ++ ".svg")
             pure mguts
         )
 

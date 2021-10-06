@@ -31,7 +31,7 @@ prover equation = do
     go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
-      | fuel <= 0 = pure (Just proof) --  go proofs
+      | fuel <= 0 = go proofs
       | otherwise = do
         proofs' <- runProverM proof step
         case List.find (null . proofIncompleteNodes) proofs' of
@@ -54,7 +54,7 @@ newtype ProverM env a = ProverM
     )
 
 instance MonadUnique (ProverM env) where
-  getUniqueSupplyM = ProverM $ lift $ lift $ lift $ getUniqueSupplyM
+  getUniqueSupplyM = ProverM $ lift $ lift $ lift getUniqueSupplyM
 
 -- | Evaluate a prover action on a proof.
 runProverM :: Proof -> ProverM env () -> ReaderT env CoreM [Proof]
@@ -149,8 +149,8 @@ step = do
                                 casesOf dty tyargs
                                   >>= mapM
                                     ( \(k, fresh) -> do
-                                        scope <- asks (envInScopeSet . intoEquationEnv xs)
-                                        let subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
+                                        let scope = mkInScopeSet (mkVarSet fresh) 
+                                            subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
                                             equation' =
                                               Equation
                                                 (fresh ++ (x `List.delete` xs))
@@ -247,23 +247,30 @@ match univs scope expr1 expr2 = do
       | x `elem` univs = modify (\subst -> extendIdSubst subst x e)
       | Var y <- e = do
         env <- ask
-        unless
-          (rnOccL env x == rnOccR env y)
-          empty
-    go (Lit lit1) (Lit lit2)
-      | lit1 == lit2 = pure ()
-      | otherwise = empty
+        guard (rnOccL env x == rnOccR env y)
+    go (Lit lit1) (Lit lit2) = guard (lit1 == lit2)
     go (App fun1 arg1) (App fun2 arg2) = do
       go fun1 fun2
-      when (isValArg arg1) (go arg1 arg2)
+      when (isValArg arg1) $
+        go arg1 arg2
     go (Lam x1 body1) (Lam x2 body2) =
       local
         (\env -> rnBndr2 env x1 x2)
         (go body1 body2)
-    go (Let bndr1 body1) (Let bndr2 body2) =
+    go (Let bndr1 body1) (Let bndr2 body2) = do
       let (xs1, defns1) = unzip (flattenBinds [bndr1])
           (xs2, defns2) = unzip (flattenBinds [bndr2])
-       in local (\env -> rnBndrs2 env xs1 xs2) $ do
-            zipWithM_ go defns1 defns2
-            go body1 body2
+      local (\env -> rnBndrs2 env xs1 xs2) $ do
+        zipWithM_ go defns1 defns2
+        go body1 body2
+    go (Case scrut1 x1 _ alts1) (Case scrut2 x2 _ alts2) = do
+      go scrut1 scrut2
+      local (\env -> rnBndr2 env x1 x2) $ do
+        zipWithM_ goAlt alts1 alts2
     go _ _ = empty
+
+    goAlt :: CoreAlt -> CoreAlt -> StateT Subst (ReaderT RnEnv2 (ProverM env)) ()
+    goAlt (c1, bs1, e1) (c2, bs2, e2) = do
+      guard (c1 == c2)
+      local (\env -> rnBndrs2 env bs1 bs2) $ 
+        go e1 e2
