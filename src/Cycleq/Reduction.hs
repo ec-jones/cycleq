@@ -19,10 +19,11 @@ import Control.Applicative
 import Control.Monad.Reader
 import Cycleq.Environment
 import GHC.Plugins hiding (empty)
+
 -- * Reduction
 
 -- | Reduce a core expression as far as possible.
-reduce :: forall m. MonadReader EquationEnv m => CoreExpr -> ReductT m CoreExpr
+reduce :: forall m. (MonadUnique m, MonadReader EquationEnv m) => CoreExpr -> ReductT m CoreExpr
 reduce expr = go expr []
   where
     -- Reduce a core expression under a series of arguments.
@@ -34,7 +35,7 @@ reduce expr = go expr []
           | isDataConWorkId x ->
             pure (mkApps (Var x) args)
           | elemVarSet x (envFreeVars env) -> do
-            stuckOn x 
+            stuckOn x
             pure (mkApps (Var x) args)
           | otherwise -> pprPanic "Variable not in scope!" (ppr x)
         Just defn ->
@@ -56,8 +57,10 @@ reduce expr = go expr []
       scope <- asks envInScopeSet
       let subst = mkOpenSubst scope [(x, arg)]
       go (substExpr subst body) args
-    go (Let bind body) [] =
-      Let bind <$> local (extendBoundVars bind) (go body [])
+    go (Let bind body) args = do
+      (bind', subst) <- freshenBind bind
+      body' <- local (extendBoundVars bind') $ go (substExpr subst body) args
+      pure (Let bind' body')
     go (Case scrut x ty alts) args = do
       scrut' <- go scrut []
       case viewNormalForm scrut' of
@@ -108,7 +111,7 @@ instance Monad m => Functor (ReductT m) where
     case res of
       Nothing -> pure (Nothing, x)
       Just (a, p) -> pure (Just (f a, p), x)
-      
+
 instance Monad m => Applicative (ReductT m) where
   pure x = ReductT $ pure (Just (x, False), Nothing)
 
@@ -121,7 +124,7 @@ instance Monad m => Applicative (ReductT m) where
         case res2 of
           Nothing -> pure (Nothing, x <|> y)
           Just (a, q) -> pure (Just (f a, p || q), x <|> y)
-    
+
 instance Monad m => Alternative (ReductT m) where
   empty = ReductT $ pure (Nothing, Nothing)
 
@@ -150,6 +153,11 @@ instance MonadReader env m => MonadReader env (ReductT m) where
 
   local f m = ReductT $ local f $ unReductT m
 
+instance MonadUnique m => MonadUnique (ReductT m) where
+  getUniqueSupplyM = ReductT $ do
+    supply <- getUniqueSupplyM
+    pure (Just (supply, False), Nothing)
+
 -- | Evaluate a reduct action.
 runReductT :: MonadPlus m => ReductT m a -> m (a, Bool, Maybe Id)
 runReductT m = do
@@ -171,3 +179,28 @@ notNeeded m = ReductT $ do
 -- | Mark a proper reduction step.
 isProper :: Monad m => ReductT m ()
 isProper = ReductT $ pure (Just ((), True), Nothing)
+
+-- | Rename a core bind to prevent capture.
+freshenBind :: (MonadUnique m) => CoreBind -> m (CoreBind, Subst)
+freshenBind (NonRec x defn) = do
+  x' <- freshenVar x
+  let scope = mkInScopeSet (mkVarSet [x'])
+      subst = mkOpenSubst scope [(x, Var x')]
+  pure (NonRec x' defn, subst)
+freshenBind (Rec binds) = do
+  (xs, xs', defns) <-
+    unzip3
+      <$> mapM
+        ( \(x, defn) -> do
+            x' <- freshenVar x
+            pure (x, x', defn)
+        )
+        binds
+  let scope = mkInScopeSet (mkVarSet xs')
+      subst = mkOpenSubst scope (zip xs (fmap Var xs'))
+      defns' = fmap (substExpr subst) defns
+  pure (Rec (zip xs' defns'), subst)
+
+-- | Create a fresh variable of a given type.
+freshenVar :: MonadUnique m => CoreBndr -> m Id
+freshenVar x = setVarUnique x <$> getUniqueM

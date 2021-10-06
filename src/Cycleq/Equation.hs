@@ -40,13 +40,18 @@ instance Outputable Equation where
     updSDocContext (\sdoc -> sdoc {sdocSuppressTypeApplications = True}) $
       -- Never qualify names
       withPprStyle (mkUserStyle neverQualify (PartWay 0)) $
-        ppr lhs <+> char '≃' <+> ppr rhs
+        pprUserExpr lhs <+> char '≃' <+> pprUserExpr rhs
 
 -- | Print an equation with explicit variable quantification.
 pprQualified :: Equation -> SDoc
 pprQualified eq@(Equation xs _ _)
   | not (null xs) = char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> ppr eq
   | otherwise = ppr eq
+
+-- | Print CoreExpr compactly without metadata.
+pprUserExpr :: CoreExpr -> SDoc
+pprUserExpr (Let bind body) = ppr body
+pprUserExpr expr = ppr expr
 
 -- | Construct an equation from a core expression of the form @\\x1 ... xn -> lhs ≃ rhs@.
 equationFromCore :: CoreExpr -> Maybe Equation

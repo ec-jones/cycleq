@@ -1,3 +1,5 @@
+{-# LANGUAGE LambdaCase #-}
+
 module Cycleq
   ( plugin,
     Equation,
@@ -40,12 +42,11 @@ plugin =
               [] -> pure ()
               (main : _) -> do
                 let equation = fromJust $ equationFromCore main
-                mproof <- runReaderT (prover equation) (mkProgramEnv prog)
-                case mproof of
-                  Nothing -> 
-                    putMsgS "Failure!"
-                  Just proof -> 
-                drawProof proof "proof.svg"
+                runReaderT (prover equation) (mkProgramEnv prog) >>= \case
+                  Nothing -> putMsgS "Failure!"
+                  Just proof -> do
+                    putMsgS "Success!"
+                    drawProof proof "proof.svg"
             pure mguts
         )
 
@@ -53,12 +54,7 @@ plugin =
 cleanCore :: CoreExpr -> CoreExpr
 cleanCore (Var x) = Var x
 cleanCore (Lit lit) = Lit lit
-cleanCore expr@(App _ _) =
-  case collectArgs expr of
-    (Let _ _, args)
-      | not (null args) -> 
-        pprSorry "Higher-order let expressions are not yet supported!" (ppr expr)  
-    (fun, args) -> mkApps (cleanCore fun) (map cleanCore args)
+cleanCore (App fun arg) = App (cleanCore fun) (cleanCore arg)
 cleanCore (Lam x body) = Lam x (cleanCore body)
 cleanCore (Let bind body) = Let (cleanBind bind) (cleanCore body)
 cleanCore (Case scrut x ty cases) = Case (cleanCore scrut) x ty (map cleanAlt cases)
