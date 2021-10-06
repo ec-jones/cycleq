@@ -81,7 +81,7 @@ insertNode equation = do
               Just (n, _) -> Node (n + 1) equation
   put
     ( proof
-        { proofNodes = IntMap.singleton (nodeId node) equation,
+        { proofNodes = IntMap.insert (nodeId node) equation (proofNodes proof),
           proofIncompleteNodes = List.insert node (proofIncompleteNodes proof)
         }
     )

@@ -1,3 +1,5 @@
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -29,15 +31,38 @@ prover equation = do
     go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
-      | fuel <= 0 = go proofs
+      | fuel <= 0 = pure (Just proof) --  go proofs
       | otherwise = do
-        proofs' <- mapReaderT (observeAllT . flip execStateT proof) step
+        proofs' <- runProverM proof step
         case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
--- | Actions in the prover monad non-deterministically manipulate a proof.
-type ProverM env = ReaderT env (StateT Proof (LogicT CoreM))
+-- | The ProverM monad non-deterministically manipulate a proof.
+newtype ProverM env a = ProverM
+  { unProverM :: ReaderT env (StateT Proof (LogicT CoreM)) a
+  }
+  deriving newtype
+    ( Functor,
+      Applicative,
+      Alternative,
+      Monad,
+      MonadPlus,
+      MonadReader env,
+      MonadState Proof,
+      MonadLogic
+    )
+
+instance MonadUnique (ProverM env) where
+  getUniqueSupplyM = ProverM $ lift $ lift $ lift $ getUniqueSupplyM
+
+-- | Evaluate a prover action on a proof.
+runProverM :: Proof -> ProverM env () -> ReaderT env CoreM [Proof]
+runProverM proof = mapReaderT (observeAllT . flip execStateT proof) . unProverM
+
+-- | Change the reader environment of a Prover action.
+withEnv :: (env' -> env) -> ProverM env a -> ProverM env' a
+withEnv f (ProverM m) = ProverM (withReaderT f m)
 
 -- | Take just the first result from the first action.
 -- Otherwise, perform the second action.
@@ -137,17 +162,17 @@ step = do
                                     )
 
                               pure ()
-                              -- pprTraceM "Case:" (ppr nodes')
+                            -- pprTraceM "Case:" (ppr nodes')
                             | otherwise -> empty
                   )
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
-reduceEquation (Equation xs lhs rhs) = withReaderT (intoEquationEnv xs) $ do
+reduceEquation (Equation xs lhs rhs) = withEnv (intoEquationEnv xs) $ do
   (equation, isProper, stuckOn) <- runReductT $ do
-        lhs' <- reduce lhs
-        rhs' <- reduce rhs
-        pure (Equation xs lhs' rhs')
+    lhs' <- reduce lhs
+    rhs' <- reduce rhs
+    pure (Equation xs lhs' rhs')
   pure $
     if isProper
       then Left equation
@@ -186,7 +211,7 @@ casesOf dty tyargs =
 -- | Create a fresh variable of a given type.
 freshVar :: Type -> ProverM env Id
 freshVar ty = do
-  unique <- lift $ lift $ lift getUniqueM
+  unique <- getUniqueM
   let name = mkInternalName unique (mkVarOcc ("x_" ++ show unique)) (UnhelpfulSpan UnhelpfulGenerated)
   pure (mkLocalId name Many ty)
 
