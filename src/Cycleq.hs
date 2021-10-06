@@ -35,12 +35,16 @@ plugin =
             let prog = map cleanBind (mg_binds mguts)
             case [ defn
                    | (x, defn) <- flattenBinds prog,
-                     getOccName (getName x) == mkVarOcc "main"
+                     getOccName (getName x) == mkVarOcc "prop"
                  ] of
               [] -> pure ()
               (main : _) -> do
                 let equation = fromJust $ equationFromCore main
-                proof <- fromJust <$> runReaderT (prover equation) (mkProgramEnv prog)
+                mproof <- runReaderT (prover equation) (mkProgramEnv prog)
+                case mproof of
+                  Nothing -> 
+                    putMsgS "Failure!"
+                  Just proof -> 
                 drawProof proof "proof.svg"
             pure mguts
         )

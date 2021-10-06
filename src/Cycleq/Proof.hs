@@ -4,8 +4,8 @@
 -- |
 -- Module: Cycleq.Proof
 module Cycleq.Proof
-  ( Node (..),
-    Proof (..),
+  ( Proof (..),
+    Node (..),
     initProof,
     insertNode,
     insertEdge,
@@ -31,6 +31,16 @@ import GHC.Plugins hiding (empty)
 import System.IO
 import System.Process
 
+-- | A partial proof graph.
+data Proof = Proof
+  { proofNodes :: IntMap.IntMap Equation,
+    proofEdges :: AdjMap,
+    -- | Nodes without a justification
+    proofIncompleteNodes :: [Node],
+    -- | Nodes suitable for superposition
+    proofLemmas :: [Node]
+  }
+
 -- | A node in a pre-proof graph
 data Node = Node
   { nodeId :: IntMap.Key,
@@ -50,16 +60,6 @@ type AdjMap = IntMap.IntMap (IntMap.IntMap Edge)
 alterAdjMap :: Functor f => (Maybe Edge -> f Edge) -> IntMap.Key -> IntMap.Key -> AdjMap -> f AdjMap
 alterAdjMap go source target =
   IntMap.alterF (fmap Just . IntMap.alterF (fmap Just . go) target . fromMaybe IntMap.empty) source
-
--- | A partial proof graph.
-data Proof = Proof
-  { proofNodes :: IntMap.IntMap Equation,
-    proofEdges :: AdjMap,
-    -- | Nodes without a justification
-    proofIncompleteNodes :: [Node],
-    -- | Nodes suitable for superposition
-    proofLemmas :: [Node]
-  }
 
 -- | An initial proof with a set of lemmas and no edges.
 initProof :: [Equation] -> [Equation] -> Proof
@@ -81,7 +81,7 @@ insertNode equation = do
               Just (n, _) -> Node (n + 1) equation
   put
     ( proof
-        { proofNodes = IntMap.singleton (nodeId node) equation,
+        { proofNodes = IntMap.insert (nodeId node) equation (proofNodes proof),
           proofIncompleteNodes = List.insert node (proofIncompleteNodes proof)
         }
     )

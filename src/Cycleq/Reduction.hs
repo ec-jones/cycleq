@@ -74,6 +74,7 @@ reduce expr = go expr []
             go rhs args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Nothing -> empty
+    go (Type ty) args = pure (mkApps (Type ty) args)
     go expr' args =
       pprPanic "Unsupproted expression!" (ppr (mkApps expr' args))
 
