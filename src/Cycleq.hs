@@ -36,26 +36,23 @@ plugin =
         "Cycleq"
         ( \mguts -> do
             let prog = cleanProg (mg_binds mguts)
-            case [ (x', defn)
-                   | (x, defn) <- flattenBinds prog,
-                     Just x' <- pure ("goal_" `List.stripPrefix` occNameString (occName x))
-                 ] of
-              [] -> putMsgS "Couldn't find a goal!"
-              goals -> forM_ goals $ \(x, goal) -> do
-                putMsgS ("Attempting to prove: " ++ x)
-                let equation = fromJust $ equationFromCore goal
-                runReaderT (prover equation) (mkProgramEnv prog) >>= \case
-                  Nothing -> putMsgS "Failure!"
-                  Just proof -> do
-                    putMsgS "Success!"
-                    drawProof proof ("proof_" ++ x ++ ".svg")
+            forM_ (flattenBinds prog) $ \(x, goal) -> do
+              case "goal_" `List.stripPrefix` occNameString (occName x) of
+                Nothing -> pure ()
+                Just goalName -> do
+                  putMsgS ("Attempting to prove: " ++ goalName)
+                  let equation = fromJust $ equationFromCore goal
+                  runReaderT (prover equation) (mkProgramEnv prog) >>= \case
+                    Nothing -> putMsgS "Failure!"
+                    Just proof -> do
+                      putMsgS "Success!"
+                      drawProof proof ("proofs/" ++ goalName ++ ".svg")
             pure mguts
         )
 
 -- | Clean up a core program by removing ticks and join points.
--- N.B. This function fails on unsuported expressions like casts and coercions.
 cleanProg :: CoreProgram -> CoreProgram
-cleanProg prog = map goBind prog 
+cleanProg prog = map goBind prog
   where
     scope :: InScopeSet
     scope = mkInScopeSet $ mkVarSet $ bindersOfBinds prog

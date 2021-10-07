@@ -4,7 +4,7 @@ module Cycleq.Environment
   ( -- * Variable Environment
     ProgramEnv,
     mkProgramEnv,
-    EquationEnv (envFreeVars, envBoundVars, envInScopeSet),
+    EquationEnv (..),
     intoEquationEnv,
     extendBoundVars,
     extendFreeVars

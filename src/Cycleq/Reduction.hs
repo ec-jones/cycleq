@@ -18,13 +18,14 @@ where
 import Control.Applicative
 import Control.Monad.Reader
 import Cycleq.Environment
+import GHC.Core.Class
 import GHC.Plugins hiding (empty)
 
 -- * Reduction
 
 -- | Reduce a core expression as far as possible.
 reduce :: forall m. (MonadUnique m, MonadReader EquationEnv m) => CoreExpr -> ReductT m CoreExpr
-reduce expr = go expr []
+reduce expr0 = go expr0 []
   where
     -- Reduce a core expression under a series of arguments.
     go :: CoreExpr -> [CoreArg] -> ReductT m CoreExpr
@@ -81,9 +82,9 @@ reduce expr = go expr []
             go rhs args
           | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
         Nothing -> empty
+    go (Tick _ expr) args = go expr args
     go (Type ty) args = pure (mkApps (Type ty) args)
-    go expr' args =
-      pprPanic "Unsupproted expression!" (ppr (mkApps expr' args))
+    go expr args = pprPanic "Unsupported expression!" (ppr (mkApps exp args))
 
 -- | Match a core expression against a first-order normal form.
 viewNormalForm :: CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)

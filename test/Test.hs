@@ -1,6 +1,6 @@
 module Test where
 
-import Prelude ()
+import Prelude (Bool (..), otherwise)
 import Cycleq
 
 id :: a -> a
@@ -31,6 +31,15 @@ drop _ Nil = Nil
 drop Zero (Cons x xs) = Cons x xs
 drop (Succ n) (Cons x xs) = drop n xs
 
+take :: Nat -> List a -> List a
+take Zero _ = Nil
+take (Succ n) Nil = Nil
+take (Succ n) (Cons x xs) = Cons x (take n xs)
+
+(++) :: List a -> List a -> List a
+Nil ++ ys = ys
+Cons x xs ++ ys = Cons x (xs ++ ys)
+
 -- goal_mapId :: Equation
 -- goal_mapId = map id ≃ id
 
@@ -43,5 +52,8 @@ drop (Succ n) (Cons x xs) = drop n xs
 -- goal_addAssoc :: Nat -> Nat -> Nat -> Equation
 -- goal_addAssoc x y z = add x (add y z) ≃ add (add x y) z
 
-goal_dropMap :: Nat -> (a -> b) -> List a -> Equation
-goal_dropMap n f xs = drop n (map f xs) ≃ map f (drop n xs)
+-- goal_dropMap :: Nat -> (a -> b) -> List a -> Equation
+-- goal_dropMap n f xs = drop n (map f xs) ≃ map f (drop n xs)
+
+-- goal_appTakeDrop :: Nat -> List a -> Equation
+-- goal_appTakeDrop n xs = take n xs ++ drop n xs ≃ xs
