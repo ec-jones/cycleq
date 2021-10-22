@@ -84,7 +84,7 @@ reduce expr0 = go expr0 []
         Nothing -> empty
     go (Tick _ expr) args = go expr args
     go (Type ty) args = pure (mkApps (Type ty) args)
-    go expr args = pprPanic "Unsupported expression!" (ppr (mkApps exp args))
+    go expr args = pprPanic "Unsupported expression!" (ppr (mkApps expr args))
 
 -- | Match a core expression against a first-order normal form.
 viewNormalForm :: CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)
