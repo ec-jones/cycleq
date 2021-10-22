@@ -7,6 +7,7 @@ module Cycleq
   )
 where
 
+import System.Directory (createDirectoryIfMissing)
 import Control.Monad.Reader
 import Cycleq.Environment
 import Cycleq.Equation
@@ -46,6 +47,7 @@ plugin =
                     Nothing -> putMsgS "Failure!"
                     Just proof -> do
                       putMsgS "Success!"
+                      liftIO $ createDirectoryIfMissing False "proofs"
                       drawProof proof ("proofs/" ++ goalName ++ ".svg")
             pure mguts
         )

@@ -27,7 +27,8 @@ library
                       text,
                       process,
                       ghc,
-                      graphviz
+                      graphviz,
+                      directory
 
   ghc-options:        -Wall
                       -Wcompat
