@@ -1,8 +1,0 @@
-packages:.
-profiling:true
-profiling-detail:all-functions
-
-package test
-  optimization: False
-
-tests: True

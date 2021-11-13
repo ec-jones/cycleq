@@ -47,21 +47,12 @@ library
 test-suite test
   type:               exitcode-stdio-1.0   
 
-  main-is:            Test.hs
+  main-is:            Z1.hs
 
   hs-source-dirs:     test
 
   build-depends:      base, cycleq
 
-  ghc-options:        -fplugin Cycleq
+  ghc-options:        -fplugin=Cycleq
 
   default-language:   Haskell2010
-
-executable profile
-  main-is:          Profile.hs
-
-  hs-source-dirs:   profile
-
-  build-depends:    base, ghc, cycleq
-
-  default-language: Haskell2010
