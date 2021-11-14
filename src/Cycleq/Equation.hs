@@ -7,6 +7,7 @@ module Cycleq.Equation
   ( -- * Equations
     Equation (..),
     pprQualified,
+    prune,
     equationFromCore,
 
     -- * Subexpressions
@@ -43,6 +44,13 @@ pprQualified :: Equation -> SDoc
 pprQualified eq@(Equation xs _ _)
   | not (null xs) = char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> ppr eq
   | otherwise = ppr eq
+
+-- | Remove redundant equations.
+prune :: Equation -> Equation
+prune (Equation _ lhs rhs) =
+  let xs = exprFreeVarsDSet lhs 
+      ys = exprFreeVarsDSet rhs
+  in Equation (dVarSetElems (unionDVarSet xs ys)) lhs rhs
 
 -- | Print CoreExpr compactly without metadata.
 pprUserExpr :: (SDoc -> SDoc) -> CoreExpr -> SDoc

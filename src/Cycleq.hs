@@ -12,7 +12,9 @@ import Cycleq.Environment
 import Cycleq.Equation
 import Cycleq.Proof
 import Cycleq.Prover
+import System.CPUTime
 import Data.Bifunctor
+import qualified Data.Map as Map
 import qualified Data.List as List
 import Data.Maybe
 import GHC.Plugins hiding (empty)
@@ -36,17 +38,28 @@ plugin =
         "Cycleq"
         ( \mguts -> do
             let prog = cleanProg (mg_binds mguts)
-            forM_ (flattenBinds prog) $ \(x, goal) -> do
-              case "goal_" `List.stripPrefix` occNameString (occName x) of
-                Nothing -> pure ()
-                Just goalName -> do
-                  putMsgS ("Attempting to prove: " ++ goalName)
-                  let equation = fromJust $ equationFromCore goal
+                go0 results (x, goal) =
+                  case "goal_" `List.stripPrefix` occNameString (occName x) of
+                      Nothing -> pure results
+                      Just goalName -> do
+                        t0 <- liftIO getCPUTime
+                        let equation = fromJust $ equationFromCore goal
+                        runReaderT (prover equation) (mkProgramEnv prog) >>= \case
+                          Nothing -> pure (Map.insert ((read goalName) :: Int) Nothing results)
+                          Just proof -> do
+                            t1 <- liftIO getCPUTime
+                            let td = ((fromInteger $ t1 - t0) / 1000000000)
+                            ts <- replicateM 0 (goN equation)
+                            pure (Map.insert ((read goalName) :: Int) (Just (td : ts)) results)
+                goN equation = do
+                  t0 <- liftIO getCPUTime
                   runReaderT (prover equation) (mkProgramEnv prog) >>= \case
-                    Nothing -> putMsgS "Failure!"
                     Just proof -> do
-                      putMsgS "Success!"
-                      drawProof proof ("proofs/" ++ goalName ++ ".svg")
+                      t1 <- liftIO getCPUTime
+                      let td = ((fromInteger $ t1 - t0) / 1000000000)
+                      pure td
+            res <- foldM go0 Map.empty (flattenBinds prog)
+            liftIO $ writeFile "benchmark" (show res)
             pure mguts
         )
 
