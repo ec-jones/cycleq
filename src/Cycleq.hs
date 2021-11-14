@@ -67,11 +67,15 @@ cleanProg prog = map goBind prog
         -- Inline join points
         let subst = mkOpenSubst scope [(x, defn)]
          in go (substExpr subst body)
-    go (Let bind body) = Let (goBind bind) (go body)
+    go (Let bind body) =
+      pprSorry
+        "Local let binds are not yet supported!\
+        \ Try adding a type signature to the top-level definition"
+        (ppr ())
     go (Case scrut x ty cases) = Case (go scrut) x ty (map goAlt cases)
     go (Tick _ expr) = go expr
     go (Type ty) = Type ty
-    go expr = pprSorry "Casts and coercions are not yet supported!" (ppr expr)
+    go expr = pprSorry "Casts and Coercions are not yet supported!" (ppr ())
 
     goBind :: CoreBind -> CoreBind
     goBind (NonRec x defn) = NonRec x (go defn)

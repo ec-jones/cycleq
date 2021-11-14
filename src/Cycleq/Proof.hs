@@ -47,6 +47,12 @@ data Node = Node
     nodeEquation :: Equation
   }
 
+instance Outputable Node where
+  ppr = ppr . nodeEquation
+
+instance Show Node where
+  show = show . nodeId
+
 instance Eq Node where
   n == m = nodeId n == nodeId m
 
