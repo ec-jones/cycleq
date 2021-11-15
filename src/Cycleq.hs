@@ -51,7 +51,7 @@ plugin =
                           Just proof -> do
                             putMsgS ("Success!")
                             t1 <- liftIO getCPUTime
-                            ts <- replicateM 0 (goN equation)
+                            ts <- replicateM 9 (goN equation)
                             pure (Map.insert (read goalName) (Just (t1 - t0 : ts)) results)
                 goN equation = do
                   t0 <- liftIO getCPUTime

@@ -84,7 +84,7 @@ step = do
       -- TODO: Check if equation is absurd
 
       markNodeAsJustified node
-      pprTraceM (show node ++ ":") (ppr equation)
+      -- pprTraceM (show node ++ ":") (ppr equation)
 
       reduceEquation equation >>= \case
         Left equation' -> do
