@@ -38,7 +38,9 @@ data Proof = Proof
     -- | Nodes without a justification
     proofIncompleteNodes :: [Node],
     -- | Nodes suitable for superposition
-    proofLemmas :: [Node]
+    proofLemmas :: [Node],
+    -- | Number of nodes in proof
+    proofSize :: Int
   }
 
 -- | A node in a pre-proof graph
@@ -74,7 +76,8 @@ initProof lemmas goals =
     { proofNodes = IntMap.fromList (zip [0 ..] (lemmas ++ goals)),
       proofEdges = IntMap.empty,
       proofIncompleteNodes = zipWith Node [length lemmas ..] goals,
-      proofLemmas = zipWith Node [0 ..] lemmas
+      proofLemmas = zipWith Node [0 ..] lemmas,
+      proofSize = length lemmas + length goals
     }
 
 -- | Insert a equation into a proof and return the new node's index.
@@ -88,7 +91,8 @@ insertNode equation = do
   put
     ( proof
         { proofNodes = IntMap.insert (nodeId node) equation (proofNodes proof),
-          proofIncompleteNodes = List.insert node (proofIncompleteNodes proof)
+          proofIncompleteNodes = node : proofIncompleteNodes proof,
+          proofSize = proofSize proof + 1
         }
     )
   pure node

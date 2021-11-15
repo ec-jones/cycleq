@@ -36,7 +36,7 @@ prover equation = do
       | otherwise = do
         proofs' <- runProverM proof step
         case List.find (null . proofIncompleteNodes) proofs' of
-          Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
+          Nothing -> go (proofs ++ (fmap (fuel - 1,) proofs'))
           Just proof' -> pure (Just proof')
 
 -- | The ProverM monad non-deterministically manipulate a proof.
@@ -92,7 +92,7 @@ step = do
           node' <- insertNode equation'
           insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
 
-          pprTraceM "Reduct:" (ppr [node'])
+          -- pprTraceM "Reduct:" (ppr [node'])
           step
         Right stuckOn -> do
           s <-
@@ -100,7 +100,7 @@ step = do
                 -- Reflexivity
                 refl equation
 
-                pprTraceM "Refl:" (ppr ([] :: [Node]))
+                -- pprTraceM "Refl:" (ppr ([] :: [Node]))
                 pure True
               )
               `cut` ( do
@@ -114,7 +114,7 @@ step = do
                                 pure node'
                             )
                             equations'
-                        pprTraceM "Cong:" (ppr nodes)
+                        -- pprTraceM "Cong:" (ppr nodes)
                         pure True
                     )
               `cut` ( do
@@ -124,7 +124,7 @@ step = do
                         node' <- insertNode equation'
                         insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
 
-                        pprTraceM "FunExt:" (ppr [node'])
+                        -- pprTraceM "FunExt:" (ppr [node'])
                         pure True
                     )
               `cut` ( do
@@ -141,7 +141,7 @@ step = do
                         insertEdge (identityEdge equation equation'') (nodeId node) (nodeId node'')
                         insertEdge (substEdge subst equation equation') (nodeId node) (nodeId node')
 
-                        pprTraceM "Super:" (ppr [node', node''])
+                        -- pprTraceM "Super:" (ppr [node', node''])
                         pure False
                         <|> do
                           -- Case analysis
@@ -166,7 +166,7 @@ step = do
                                           pure node'
                                       )
 
-                                pprTraceM "Case:" (ppr nodes')
+                                -- pprTraceM "Case:" (ppr nodes')
                                 pure False
                               | otherwise -> empty
                     )
@@ -226,10 +226,10 @@ freshVar ty = do
 -- | Rewrite the first equation with an instance of the second.
 superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
 superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
-  scope <- asks (envInScopeSet . intoEquationEnv (xs ++ ys))
+  scope <- asks (envInScopeSet . intoEquationEnv xs)
   sub <- equationSubExprs (Equation (xs ++ ys) lhs' rhs')
   guard (not (isVariableSubExpr sub))
-  withSubExpr sub $ \expr ->
+  second prune <$> (withSubExpr sub $ \expr ->
     ( do
         -- guard (isNonVar lhs)
         subst <- match ys scope lhs expr
@@ -239,7 +239,7 @@ superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
               -- guard (isNonVar rhs)
               subst <- match ys scope rhs expr
               pure (subst, substExpr subst lhs)
-          )
+          ))
   where
     isNonVar (Var _) = False
     isNonVar _ = True

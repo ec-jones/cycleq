@@ -1,1 +1,50 @@
-fromList []
+\begin{tabular}{|l|l|}
+\hline
+Name & Time (ms)\\\hline
+1 & 2.49\\\hline
+2 & 579.65\\\hline
+3 & 60.29\\\hline
+4 & 0.18\\\hline
+6 & 0.48\\\hline
+7 & 0.34\\\hline
+8 & 0.58\\\hline
+9 & 1795.03\\\hline
+10 & 0.18\\\hline
+11 & 0.02\\\hline
+12 & 2.23\\\hline
+13 & 0.07\\\hline
+18 & 0.24\\\hline
+19 & 1.23\\\hline
+21 & 0.22\\\hline
+22 & 5.31\\\hline
+23 & 2.53\\\hline
+28 & 7.66\\\hline
+31 & 4.46\\\hline
+32 & 2.43\\\hline
+35 & 0.09\\\hline
+36 & 0.50\\\hline
+37 & 28.95\\\hline
+38 & 474.22\\\hline
+39 & 1.00\\\hline
+40 & 0.02\\\hline
+41 & 3.92\\\hline
+42 & 0.07\\\hline
+44 & 0.27\\\hline
+45 & 0.15\\\hline
+46 & 0.03\\\hline
+47 & 34.89\\\hline
+50 & 3.49\\\hline
+51 & 9.11\\\hline
+55 & 3.55\\\hline
+56 & 2451.96\\\hline
+57 & 2138.32\\\hline
+58 & 4260.95\\\hline
+64 & 1.61\\\hline
+65 & 3.49\\\hline
+67 & 2.53\\\hline
+69 & 3.36\\\hline
+80 & 4.38\\\hline
+82 & 12.66\\\hline
+83 & 16.52\\\hline
+84 & 10.34\\\hline
+\end{tabular}

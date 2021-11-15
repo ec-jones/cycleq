@@ -7,6 +7,7 @@ module Cycleq
   )
 where
 
+import Numeric (showFFloat)
 import Control.Monad.Reader
 import Cycleq.Environment
 import Cycleq.Equation
@@ -42,26 +43,41 @@ plugin =
                   case "goal_" `List.stripPrefix` occNameString (occName x) of
                       Nothing -> pure results
                       Just goalName -> do
+                        putMsgS ("Attempting to prove: " ++ goalName)
                         t0 <- liftIO getCPUTime
                         let equation = fromJust $ equationFromCore goal
                         runReaderT (prover equation) (mkProgramEnv prog) >>= \case
                           Nothing -> pure (Map.insert (read goalName :: Int) Nothing results)
                           Just proof -> do
+                            putMsgS ("Success!")
                             t1 <- liftIO getCPUTime
-                            let td = fromInteger (t1 - t0) / 1000000000
                             ts <- replicateM 0 (goN equation)
-                            pure (Map.insert (read goalName) (Just (td : ts)) results)
+                            pure (Map.insert (read goalName) (Just (t1 - t0 : ts)) results)
                 goN equation = do
                   t0 <- liftIO getCPUTime
                   runReaderT (prover equation) (mkProgramEnv prog) >>= \case
                     Just proof -> do
                       t1 <- liftIO getCPUTime
-                      let td = fromInteger (t1 - t0) / 1000000000
-                      pure td
+                      pure (t1 - t0)
             res <- foldM go0 Map.empty (flattenBinds prog)
-            liftIO $ writeFile "benchmark" (show res)
+            putMsgS (show $ Map.size $ Map.filter isJust res)
+            putMsgS (show $ Map.size res)
+            putMsgS (show $ sum $ sum <$> Map.mapMaybe id res)
+            liftIO $ writeFile "benchmark" (showMark res)
             pure mguts
         )
+
+-- | Convert benchmark to latex tabular
+showMark :: Map.Map Int (Maybe [Integer]) -> String
+showMark bm =
+    unlines $ pre ++ titles : Map.foldrWithKey (\k v ss -> entry k v : ss) post bm
+  where
+    pre = ["\\begin{tabular}{|l|l|}", "\\hline"]
+    titles = concat $ List.intersperse " & " ["Name", "Time (ms)"] ++ ["\\\\\\hline"]
+    entry n Nothing = concat $ List.intersperse " & " [show n, "X"] ++ ["\\\\\\hline"]
+    entry n (Just xs) = concat $ List.intersperse " & " [show n, showFFloat (Just 2) (avg xs / fromIntegral 1000000000) ""] ++ ["\\\\\\hline"]
+    avg xs = fromIntegral (sum xs) / fromIntegral (length xs)
+    post = ["\\end{tabular}"]
 
 -- | Clean up a core program by removing ticks and join points.
 cleanProg :: CoreProgram -> CoreProgram
