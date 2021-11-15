@@ -45,18 +45,18 @@ plugin =
                         t0 <- liftIO getCPUTime
                         let equation = fromJust $ equationFromCore goal
                         runReaderT (prover equation) (mkProgramEnv prog) >>= \case
-                          Nothing -> pure (Map.insert ((read goalName) :: Int) Nothing results)
+                          Nothing -> pure (Map.insert (read goalName :: Int) Nothing results)
                           Just proof -> do
                             t1 <- liftIO getCPUTime
-                            let td = ((fromInteger $ t1 - t0) / 1000000000)
+                            let td = fromInteger (t1 - t0) / 1000000000
                             ts <- replicateM 0 (goN equation)
-                            pure (Map.insert ((read goalName) :: Int) (Just (td : ts)) results)
+                            pure (Map.insert (read goalName) (Just (td : ts)) results)
                 goN equation = do
                   t0 <- liftIO getCPUTime
                   runReaderT (prover equation) (mkProgramEnv prog) >>= \case
                     Just proof -> do
                       t1 <- liftIO getCPUTime
-                      let td = ((fromInteger $ t1 - t0) / 1000000000)
+                      let td = fromInteger (t1 - t0) / 1000000000
                       pure td
             res <- foldM go0 Map.empty (flattenBinds prog)
             liftIO $ writeFile "benchmark" (show res)
