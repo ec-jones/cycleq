@@ -24,18 +24,19 @@ import GHC.Plugins hiding (empty)
 
 -- | Breadth-first search for a proof up-to a fixed depth.
 prover ::
+  Bool ->
   Equation ->
   ReaderT ProgramEnv CoreM (Maybe Proof)
-prover equation = do
+prover redundantLemma equation = do
   let proof = initProof [] [equation]
   go [(15, proof)]
   where
     go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
-      | fuel < 0 = go proofs
+      | fuel <= 0 = go proofs
       | otherwise = do
-        proofs' <- runProverM proof step
+        proofs' <- runProverM proof (step redundantLemma)
         case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
@@ -77,9 +78,11 @@ cut m1 m2 =
     Nothing -> m2
     Just (res, _) -> pure res
 
+infixr `cut`
+
 -- | Expand a partial proof tree.
-step :: ProverM ProgramEnv ()
-step = do
+step :: Bool -> ProverM ProgramEnv ()
+step redundantLemma = do
   proof <- get
   case proofIncompleteNodes proof of
     [] -> pure ()
@@ -93,6 +96,7 @@ step = do
       reduceEquation equation >>= \case
         Left equation' -> do
           -- Reduce
+          when redundantLemma $ markNodeAsLemma node
           node' <- insertNode equation'
           t0 <- liftIO getCPUTime
           insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
@@ -100,7 +104,7 @@ step = do
           edgeTime (t1 - t0)
 
           -- pprTraceM "Reduct:" (ppr [node'])
-          step
+          step redundantLemma
         Right stuckOn -> do
           s <-
             ( do
@@ -112,6 +116,7 @@ step = do
               )
               `cut` ( do
                         -- Congruence
+                        when redundantLemma $ markNodeAsLemma node
                         equations' <- consCong equation
                         nodes <-
                           mapM
@@ -142,6 +147,8 @@ step = do
                     )
               `cut` ( do
                         -- Superposition
+                        when redundantLemma $ markNodeAsLemma node
+
                         -- Select a lemma node
                         node' <- gets proofLemmas >>= msum . fmap pure
                         let equation' = nodeEquation node'
@@ -191,7 +198,7 @@ step = do
                     )
           when
             s
-            step
+            (step redundantLemma)
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
@@ -250,12 +257,12 @@ superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
   guard (not (isVariableSubExpr sub))
   second prune <$> (withSubExpr sub $ \expr ->
     ( do
-        -- guard (isNonVar lhs)
+        guard (isNonVar lhs)
         subst <- match ys scope lhs expr
         pure (subst, substExpr subst rhs)
     )
       <|> ( do
-              -- guard (isNonVar rhs)
+              guard (isNonVar rhs)
               subst <- match ys scope rhs expr
               pure (subst, substExpr subst lhs)
           ))
