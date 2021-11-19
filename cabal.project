@@ -1,0 +1,10 @@
+packages:.
+profiling: True
+profiling-detail: all-functions
+
+tests: True
+
+haddock-internal: True
+
+package test
+  optimization: False

@@ -56,3 +56,13 @@ test-suite test
   ghc-options:        -fplugin=Cycleq
 
   default-language:   Haskell2010
+
+
+executable profile
+  main-is:            Profile.hs
+
+  hs-source-dirs:     profile
+
+  build-depends:      base, ghc, cycleq
+
+  default-language:   Haskell2010
