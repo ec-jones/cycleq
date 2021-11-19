@@ -49,9 +49,9 @@ reduce expr0 = go expr0 []
       -- Full-beta stategy
       arg' <- notNeeded (go arg [])
       go fun (arg' : args)
-    go (Lam x body) [] = do
+    go (Lam x body) [] = pure (Lam x body)
       -- Full-beta stategy
-      Lam x <$> local (extendFreeVars x) (notNeeded $ go body [])
+      -- Lam x <$> local (extendFreeVars x) (notNeeded $ go body [])
     go (Lam x body) (arg : args) = do
       isProper
       scope <- asks envInScopeSet

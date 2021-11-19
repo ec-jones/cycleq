@@ -37,7 +37,7 @@ data Equation
 
 instance Outputable Equation where
   ppr (Equation xs lhs rhs) =
-    pprUserExpr id lhs <+> char '≃' <+> pprUserExpr id rhs
+    pprUserExpr id lhs <+> text "===" <+> pprUserExpr id rhs
 
 -- | Print an equation with explicit variable quantification.
 pprQualified :: Equation -> SDoc
@@ -79,7 +79,7 @@ equationFromCore :: CoreExpr -> Maybe Equation
 equationFromCore expr
   | let (xs, body) = collectBinders expr,
     (Var eq, [ty, lhs, rhs]) <- collectArgs body,
-    occName eq == mkVarOcc "≃" =
+    occName eq == mkVarOcc "===" =
     Just (Equation (filter isId xs) lhs rhs)
   | otherwise = Nothing
 

@@ -47,7 +47,7 @@ library
 test-suite test
   type:               exitcode-stdio-1.0   
 
-  main-is:            M.hs
+  main-is:            IsaPlanner.hs
 
   hs-source-dirs:     test
 

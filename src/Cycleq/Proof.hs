@@ -11,6 +11,7 @@ module Cycleq.Proof
     insertEdge,
     markNodeAsJustified,
     markNodeAsLemma,
+    edgeTime,
     drawProof,
   )
 where
@@ -22,7 +23,7 @@ import Cycleq.Edge
 import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
-import qualified Data.IntMap as IntMap
+import qualified Data.IntMap.Strict as IntMap
 import qualified Data.List as List
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
@@ -40,7 +41,9 @@ data Proof = Proof
     -- | Nodes suitable for superposition
     proofLemmas :: [Node],
     -- | Number of nodes in proof
-    proofSize :: Int
+    proofSize :: Int,
+    -- | Time taken in inserting edges
+    proofEdgeTime :: Integer
   }
 
 -- | A node in a pre-proof graph
@@ -77,7 +80,8 @@ initProof lemmas goals =
       proofEdges = IntMap.empty,
       proofIncompleteNodes = zipWith Node [length lemmas ..] goals,
       proofLemmas = zipWith Node [0 ..] lemmas,
-      proofSize = length lemmas + length goals
+      proofSize = length lemmas + length goals,
+      proofEdgeTime = 0
     }
 
 -- | Insert a equation into a proof and return the new node's index.
@@ -91,7 +95,7 @@ insertNode equation = do
   put
     ( proof
         { proofNodes = IntMap.insert (nodeId node) equation (proofNodes proof),
-          proofIncompleteNodes = node : proofIncompleteNodes proof,
+          proofIncompleteNodes = List.insert node (proofIncompleteNodes proof),
           proofSize = proofSize proof + 1
         }
     )
@@ -132,6 +136,10 @@ insertEdge edge source target
       _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge Prelude.<> edge') source node) succs
       _ <- IntMap.traverseWithKey (\node edge' -> insertEdge (edge' Prelude.<> edge) node target) preds
       pure ()
+
+-- | Increate the edge time
+edgeTime :: MonadState Proof m => Integer -> m ()
+edgeTime delta = modify (\proof -> proof { proofEdgeTime = delta + proofEdgeTime proof })
 
 -- | Write a proof out as SVG using the @dot@ system command.
 drawProof :: Proof -> FilePath -> CoreM ()

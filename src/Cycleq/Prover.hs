@@ -7,6 +7,7 @@
 -- Module: Cycleq.Prover
 module Cycleq.Prover (prover) where
 
+import System.CPUTime
 import Control.Applicative
 import Control.Monad.Logic
 import Control.Monad.Reader
@@ -27,16 +28,16 @@ prover ::
   ReaderT ProgramEnv CoreM (Maybe Proof)
 prover equation = do
   let proof = initProof [] [equation]
-  go [(10, proof)]
+  go [(15, proof)]
   where
     go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
-      | fuel <= 0 = go proofs
+      | fuel < 0 = go proofs
       | otherwise = do
         proofs' <- runProverM proof step
         case List.find (null . proofIncompleteNodes) proofs' of
-          Nothing -> go (proofs ++ (fmap (fuel - 1,) proofs'))
+          Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
           Just proof' -> pure (Just proof')
 
 -- | The ProverM monad non-deterministically manipulate a proof.
@@ -56,6 +57,9 @@ newtype ProverM env a = ProverM
 
 instance MonadUnique (ProverM env) where
   getUniqueSupplyM = ProverM $ lift $ lift $ lift getUniqueSupplyM
+
+instance MonadIO (ProverM env) where
+  liftIO m = ProverM $ liftIO m
 
 -- | Evaluate a prover action on a proof.
 runProverM :: Proof -> ProverM env () -> ReaderT env CoreM [Proof]
@@ -90,7 +94,10 @@ step = do
         Left equation' -> do
           -- Reduce
           node' <- insertNode equation'
+          t0 <- liftIO getCPUTime
           insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
+          t1 <- liftIO getCPUTime
+          edgeTime (t1 - t0)
 
           -- pprTraceM "Reduct:" (ppr [node'])
           step
@@ -110,7 +117,10 @@ step = do
                           mapM
                             ( \equation' -> do
                                 node' <- insertNode equation'
+                                t0 <- liftIO getCPUTime
                                 insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
+                                t1 <- liftIO getCPUTime
+                                edgeTime (t1 - t0)
                                 pure node'
                             )
                             equations'
@@ -122,7 +132,10 @@ step = do
                         markNodeAsLemma node
                         equation' <- funExt equation
                         node' <- insertNode equation'
+                        t0 <- liftIO getCPUTime
                         insertEdge (identityEdge equation equation') (nodeId node) (nodeId node')
+                        t1 <- liftIO getCPUTime
+                        edgeTime (t1 - t0)
 
                         -- pprTraceM "FunExt:" (ppr [node'])
                         pure True
@@ -138,8 +151,11 @@ step = do
                         node'' <- insertNode equation''
 
                         -- Add edges
+                        t0 <- liftIO getCPUTime
                         insertEdge (identityEdge equation equation'') (nodeId node) (nodeId node'')
                         insertEdge (substEdge subst equation equation') (nodeId node) (nodeId node')
+                        t1 <- liftIO getCPUTime
+                        edgeTime (t1 - t0)
 
                         -- pprTraceM "Super:" (ppr [node', node''])
                         pure False
@@ -162,7 +178,10 @@ step = do
                                                   (substExpr subst lhs)
                                                   (substExpr subst rhs)
                                           node' <- insertNode equation'
+                                          t0 <- liftIO getCPUTime
                                           insertEdge (caseEdge x fresh equation equation') (nodeId node) (nodeId node')
+                                          t1 <- liftIO getCPUTime
+                                          edgeTime (t1 - t0)
                                           pure node'
                                       )
 
@@ -226,7 +245,7 @@ freshVar ty = do
 -- | Rewrite the first equation with an instance of the second.
 superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
 superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
-  scope <- asks (envInScopeSet . intoEquationEnv xs)
+  scope <- asks (envInScopeSet . intoEquationEnv (xs ++ ys))
   sub <- equationSubExprs (Equation (xs ++ ys) lhs' rhs')
   guard (not (isVariableSubExpr sub))
   second prune <$> (withSubExpr sub $ \expr ->
