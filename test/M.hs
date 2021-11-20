@@ -1,4 +1,4 @@
-module P where
+module M where
 
 import Prelude ()
 import Cycleq
@@ -59,21 +59,21 @@ argsT (Var x) = Nil
 argsT (Cst n) = Nil
 argsT (App e1 e2) = Cons e2 (argsE e1)
 
-goal_1 :: Expr a -> Equation
-goal_1 e = mapE id e ≃ e
+prop_1 :: Expr a -> Equation
+prop_1 e = mapE id e === e
 
-goal_2 :: (b -> c) -> (a -> b) -> Expr a -> Equation
-goal_2 f g e =
-  mapE (f `comp` g) e ≃ mapE f (mapE g e)
+prop_2 :: (b -> c) -> (a -> b) -> Expr a -> Equation
+prop_2 f g e =
+  mapE (f `comp` g) e === mapE f (mapE g e)
 
-goal_3 :: (a -> b) -> Expr a -> Equation
-goal_3 f e =
-  argsE (mapE f e) ≃ map (mapE f) (argsE e)
+prop_3 :: (a -> b) -> Expr a -> Equation
+prop_3 f e =
+  argsE (mapE f e) === map (mapE f) (argsE e)
 
-goal_4 :: (a -> b) -> Tm a -> Equation
-goal_4 f e =
-  argsT (mapT f e) ≃ map (mapE f) (argsT e)
+prop_4 :: (a -> b) -> Tm a -> Equation
+prop_4 f e =
+  argsT (mapT f e) === map (mapE f) (argsT e)
 
-goal_5 :: (a -> b) -> Expr a -> Equation
-goal_5 f e =
-  headE (mapE f e) ≃ mapE f (headE e)
+prop_5 :: (a -> b) -> Expr a -> Equation
+prop_5 f e =
+  headE (mapE f e) === mapE f (headE e)
