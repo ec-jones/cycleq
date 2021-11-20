@@ -163,12 +163,12 @@ instance MonadUnique m => MonadUnique (ReductT m) where
     pure (Just (supply, False), Nothing)
 
 -- | Evaluate a reduct action.
-runReductT :: MonadPlus m => ReductT m a -> m (a, Bool, Maybe Id)
-runReductT m = do
+runReductT :: Monad m => a -> ReductT m a -> m (a, Bool, Maybe Id)
+runReductT a m = do
   (res, x) <- unReductT m
   case res of
-    Nothing -> empty
-    Just (a, p) -> pure (a, p, x)
+    Nothing -> pure (a, False, x)
+    Just (a', p) -> pure (a', p, x)
 
 -- | Mark a variable as preventing progress.
 stuckOn :: Monad m => Id -> ReductT m ()

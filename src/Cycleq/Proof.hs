@@ -23,7 +23,7 @@ import Cycleq.Edge
 import Cycleq.Equation
 import Data.GraphViz
 import Data.GraphViz.Attributes.Complete
-import qualified Data.IntMap.Strict as IntMap
+import qualified Data.IntMap as IntMap
 import qualified Data.List as List
 import qualified Data.Text.Lazy as Text
 import qualified Data.Text.Lazy.IO as Text
@@ -165,8 +165,8 @@ drawProof proof path = do
     params dynFlags =
       nonClusteredParams
         { globalAttributes =
-            [ NodeAttrs [FontName (Text.pack "courier")],
-              EdgeAttrs [FontName (Text.pack "courier")]
+            [ NodeAttrs [], -- FontName (Text.pack "courier")],
+              EdgeAttrs [] --FontName (Text.pack "courier")]
             ],
           fmtNode = \(i, n) ->
             [ textLabel (Text.pack (showSDoc dynFlags (ppr i GHC.Plugins.<> text ":" <+> ppr n)))

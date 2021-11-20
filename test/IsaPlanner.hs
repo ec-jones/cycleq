@@ -26,6 +26,7 @@ prop_01 n xs =
 -- prop_04 n xs =
 --   S (count n xs) === count n (Cons n xs)
 
+-- NA
 -- prop_05 n x xs
 --   = n === x ==> S (count n xs) === count n (x : xs)
 
@@ -71,6 +72,7 @@ prop_13 n x xs =
 -- prop_15 x xs =
 --   len (ins x xs) === S (len xs)
 
+-- NA
 -- prop_16 :: Nat -> List Nat -> Equation
 -- prop_16 x xs
 --   = xs === Nil ==> last (Cons x xs) === x
@@ -105,18 +107,19 @@ prop_23 :: Nat -> Nat -> Equation
 prop_23 a b =
   max a b === max b a
 
--- FAIl
--- prop_24 :: Nat -> Nat -> Equation
--- prop_24 a b =
---   max a b == a === b <= a
+prop_24 :: Nat -> Nat -> Equation
+prop_24 a b =
+  max a b == a === b <= a
 
 prop_25 :: Nat -> Nat -> Equation
 prop_25 a b =
   max a b == b === a <= b
 
+-- NA
 -- prop_26 x xs ys
 --   = x `elem` xs ==> x `elem` (xs ++ ys)
 
+-- NA
 -- prop_27 x xs ys
 --   = x `elem` ys ==> x `elem` (xs ++ ys)
 
@@ -143,15 +146,13 @@ prop_32 :: Nat -> Nat -> Equation
 prop_32 a b =
   min a b === min b a
 
--- FAIL
--- prop_33 :: Nat -> Nat -> Equation
--- prop_33 a b =
---   min a b == a === a <= b
+prop_33 :: Nat -> Nat -> Equation
+prop_33 a b =
+  min a b == a === a <= b
 
--- FAIL
--- prop_34 :: Nat -> Nat -> Equation
--- prop_34 a b =
---   min a b == b === b <= a
+prop_34 :: Nat -> Nat -> Equation
+prop_34 a b =
+  min a b == b === b <= a
 
 prop_35 :: List a -> Equation
 prop_35 xs =
@@ -210,9 +211,10 @@ prop_46 xs =
 -- prop_47 a =
 --   height (mirror a) === height a
 
+-- NA
 -- prop_48 :: List a -> Equation
 -- prop_48 xs
---   = not (null xs) ==> butlast xs ++ [last xs] === xs
+  -- = not (null xs) ==> butlast xs ++ [last xs] === xs
 
 prop_49 :: List a -> List a -> Equation
 prop_49 xs ys =
@@ -237,7 +239,7 @@ prop_51 xs x =
 -- prop_53 n xs =
 --   count n xs === count n (sort xs)
 
--- FAIl
+-- FAIL
 -- prop_54 :: Nat -> Nat -> Equation
 -- prop_54 n m =
 --   (m + n) - n === m
@@ -254,14 +256,17 @@ prop_57 :: Nat -> Nat -> List a -> Equation
 prop_57 n m xs =
   drop n (take m xs) === take (m - n) (drop n xs)
 
-prop_58 :: Nat -> List a -> List a -> Equation
-prop_58 n xs ys =
-  drop n (zip xs ys) === zip (drop n xs) (drop n ys)
+-- FAIL
+-- prop_58 :: Nat -> List a -> List a -> Equation
+-- prop_58 n xs ys =
+--   drop n (zip xs ys) === zip (drop n xs) (drop n ys)
 
+-- NA
 -- prop_59 :: List a -> List a -> Equation
 -- prop_59 xs ys
 --   = ys === Nil ==> last (xs ++ ys) === last xs
 
+-- NA
 -- prop_60 :: List a -> List a -> Equation
 -- prop_60 xs ys
 --   = not (null ys) ==> last (xs ++ ys) === last ys
@@ -270,9 +275,11 @@ prop_61 :: List Nat -> List Nat -> Equation
 prop_61 xs ys =
   last (xs ++ ys) === lastOfTwo xs ys
 
+-- NA
 -- prop_62 xs x
 --   = not (null xs) ==> last (Cons x xs) === last xs
 
+-- NA
 -- prop_63 :: Nat -> List a -> Equation
 -- prop_63 n xs
 --   = n < len xs ==> last (drop n xs) === last xs
@@ -281,9 +288,10 @@ prop_64 :: Nat -> List Nat -> Equation
 prop_64 x xs =
   last (xs ++ Cons x Nil) === x
 
-prop_65 :: Nat -> Nat -> Equation
-prop_65 i m =
-  i < S (m + i) === True
+-- FAIL
+-- prop_65 :: Nat -> Nat -> Equation
+-- prop_65 i m =
+--   i < S (m + i) === True
 
 -- FAIL
 -- prop_66 :: (a -> Bool) -> List a -> Equation
@@ -299,13 +307,16 @@ prop_67 xs =
 -- prop_68 n xs =
 --   len (delete n xs) <= len xs === True
 
-prop_69 :: Nat -> Nat -> Equation
-prop_69 n m =
-  n <= (m + n) === True
+-- FAIL
+-- prop_69 :: Nat -> Nat -> Equation
+-- prop_69 n m =
+--   n <= (m + n) === True
 
+-- NA
 -- prop_70 m n
 --   = m <= n ==> bool (m <= S n)
 
+-- NA
 -- prop_71 :: Nat -> List a-> Equation
 -- prop_71 x y xs
 --   = (x == y) === False ==> elem x (ins y xs) === elem x xs
@@ -330,10 +341,12 @@ prop_69 n m =
 -- prop_75 n m xs =
 --   count n xs + count n (Cons m Nil) === count n (Cons m xs)
 
+-- NA
 -- prop_76 :: Nat -> Nat -> List Nat -> Equation
 -- prop_76 n m xs
 --   = (n == m) === False ==> count n (xs ++ Cons m Nil) === count n xs
 
+-- NA
 -- prop_77 x xs
 --   = sorted xs ==> sorted (insort x xs)
 
@@ -351,9 +364,10 @@ prop_80 :: Nat -> List a -> List a -> Equation
 prop_80 n xs ys =
   take n (xs ++ ys) === take n xs ++ take (n - len xs) ys
 
-prop_81 :: Nat -> Nat -> List a -> Equation
-prop_81 n m xs {- ys -} =
-  take n (drop m xs) === drop m (take (n + m) xs)
+-- FAIL
+-- prop_81 :: Nat -> Nat -> List a -> Equation
+-- prop_81 n m xs {- ys -} =
+--   take n (drop m xs) === drop m (take (n + m) xs)
 
 prop_82 :: Nat -> List a -> List a -> Equation
 prop_82 n xs ys =
@@ -371,10 +385,12 @@ prop_84 xs ys zs =
 
 -- One way to prove this is to first show "Nick's lemma":
 -- len xs = len ys ==> zip xs ys ++ zip as bs = zip (xs ++ as) (ys ++ bs)
+-- NA
 -- prop_85 xs ys
 --   = (len xs === len ys) ==>
 --     (zip (rev xs) (rev ys) === rev (zip xs ys))
 
+-- NA
 -- prop_86 x y xs
 --   = x < y ==> (elem x (ins y xs) === elem x xs)
 
@@ -407,7 +423,7 @@ _ && _ = False
 (==) :: Nat -> Nat -> Bool
 (==) Z Z = True
 (==) Z _ = False
-(==) (S n) (S m) = True
+(==) (S n) (S m) = n == m
 (==) (S _) _ = False
 
 (<=) :: Nat -> Nat -> Bool

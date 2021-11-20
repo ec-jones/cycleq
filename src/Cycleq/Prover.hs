@@ -26,20 +26,21 @@ import GHC.Plugins hiding (empty)
 prover ::
   Bool ->
   Equation ->
-  ReaderT ProgramEnv CoreM (Maybe Proof)
+  ReaderT ProgramEnv CoreM (Maybe (Int, Proof))
 prover redundantLemma equation = do
   let proof = initProof [] [equation]
-  go [(15, proof)]
+  go [(10, proof)]
   where
-    go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe Proof)
+    go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe (Int, Proof))
     go [] = pure Nothing
     go ((fuel, proof) : proofs)
+      | null (proofIncompleteNodes proof) = pure (Just (fuel, proof))
       | fuel <= 0 = go proofs
       | otherwise = do
         proofs' <- runProverM proof (step redundantLemma)
         case List.find (null . proofIncompleteNodes) proofs' of
           Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
-          Just proof' -> pure (Just proof')
+          Just proof' -> pure (Just (fuel, proof'))
 
 -- | The ProverM monad non-deterministically manipulate a proof.
 newtype ProverM env a = ProverM
@@ -61,6 +62,10 @@ instance MonadUnique (ProverM env) where
 
 instance MonadIO (ProverM env) where
   liftIO m = ProverM $ liftIO m
+
+-- | Lift a CoreM action into a ProverM.
+liftCoreM :: CoreM a -> ProverM env a
+liftCoreM m = ProverM $ lift $ lift $ lift m
 
 -- | Evaluate a prover action on a proof.
 runProverM :: Proof -> ProverM env () -> ReaderT env CoreM [Proof]
@@ -202,8 +207,8 @@ step redundantLemma = do
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
-reduceEquation (Equation xs lhs rhs) = withEnv (intoEquationEnv xs) $ do
-  (equation, isProper, stuckOn) <- runReductT $ do
+reduceEquation goal@(Equation xs lhs rhs) = withEnv (intoEquationEnv xs) $ do
+  (equation, isProper, stuckOn) <- runReductT goal $ do
     lhs' <- reduce lhs
     rhs' <- reduce rhs
     pure (Equation xs lhs' rhs')
@@ -251,11 +256,11 @@ freshVar ty = do
 
 -- | Rewrite the first equation with an instance of the second.
 superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
-superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
-  scope <- asks (envInScopeSet . intoEquationEnv (xs ++ ys))
-  sub <- equationSubExprs (Equation (xs ++ ys) lhs' rhs')
+superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
+  scope <- asks (envInScopeSet . intoEquationEnv xs)
+  sub <- equationSubExprs goal
   guard (not (isVariableSubExpr sub))
-  second prune <$> (withSubExpr sub $ \expr ->
+  withSubExpr sub $ \expr ->
     ( do
         guard (isNonVar lhs)
         subst <- match ys scope lhs expr
@@ -265,7 +270,7 @@ superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
               guard (isNonVar rhs)
               subst <- match ys scope rhs expr
               pure (subst, substExpr subst lhs)
-          ))
+          )
   where
     isNonVar (Var _) = False
     isNonVar _ = True
@@ -274,11 +279,17 @@ superpose (Equation xs lhs' rhs') lemma@(Equation ys lhs rhs) = do
 match :: [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> ProverM ProgramEnv Subst
 match univs scope expr1 expr2 = do
   guard (eqType (exprType expr1) (exprType expr2))
-  runReaderT (execStateT (go expr1 expr2) (mkEmptySubst scope)) (mkRnEnv2 scope)
+  subst@(Subst _ idenv _ _) <- runReaderT (execStateT (go expr1 expr2) (mkEmptySubst scope)) (mkRnEnv2 scope)
+  guard (all (\x -> elemVarEnv x idenv) univs)
+  pure subst
   where
     go :: CoreExpr -> CoreExpr -> StateT Subst (ReaderT RnEnv2 (ProverM env)) ()
     go (Var x) e
-      | x `elem` univs = modify (\subst -> extendIdSubst subst x e)
+      | x `elem` univs = do
+        subst@(Subst _ idenv _ _) <- get
+        case lookupVarEnv idenv x of
+          Nothing -> put (extendIdSubst subst x e)
+          Just e' -> guard (cheapEqExpr e e')
       | Var y <- e = do
         env <- ask
         guard (rnOccL env x == rnOccR env y)
