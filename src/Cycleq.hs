@@ -47,11 +47,12 @@ plugin =
                       putMsgS ("Attempting to prove: " ++ goalName)
                       let equation = fromJust $ equationFromCore goal
                       t0 <- liftIO getCPUTime
-                      runReaderT (prover equation) (mkProgramEnv prog) >>= \case
+                      runReaderT (prover False equation) (mkProgramEnv prog) >>= \case
                         Nothing -> pure (Map.insert (read goalName :: Int) Nothing results)
-                        Just proof -> do
+                        Just (fuel, proof) -> do
                           t1 <- liftIO getCPUTime
-                          putMsgS "Success!"
+                          -- putMsgS "Success!"
+                          -- putMsgS ("Fuel: " ++ show fuel)
                           ts <- replicateM (n - 1) (go equation)
                           -- putMsgS
                           --   ( "Total time: "
@@ -71,17 +72,17 @@ plugin =
                 -- Iterate
                 go equation = do
                   t0 <- liftIO getCPUTime
-                  runReaderT (prover equation) (mkProgramEnv prog) >>= \case
+                  runReaderT (prover False equation) (mkProgramEnv prog) >>= \case
                     Nothing -> pprPanic "Unexpected proof failure!" (ppr equation)
-                    Just proof -> do
+                    Just (_, proof) -> do
                       t1 <- liftIO getCPUTime
                       pure (t1 - t0, proofEdgeTime proof)
 
-            res <- foldM (prove 10) Map.empty (flattenBinds prog)
+            res <- foldM (prove 1) Map.empty (flattenBinds prog)
 
             putMsgS ("No. Problems: " ++ show (Map.size res))
             putMsgS ("Total solved: " ++ show (Map.size $ Map.filter isJust res))
-            liftIO $ writeFile "benchmark" (showMark res)
+            liftIO $ writeFile "benchmark.tex" (showMark res)
             pure mguts
         )
 
