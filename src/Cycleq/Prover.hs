@@ -29,7 +29,7 @@ prover ::
   ReaderT ProgramEnv CoreM (Maybe (Int, Proof))
 prover redundantLemma equation = do
   let proof = initProof [] [equation]
-  go [(10, proof)]
+  go [(11, proof)]
   where
     go :: [(Int, Proof)] -> ReaderT ProgramEnv CoreM (Maybe (Int, Proof))
     go [] = pure Nothing
@@ -39,7 +39,7 @@ prover redundantLemma equation = do
       | otherwise = do
         proofs' <- runProverM proof (step redundantLemma)
         case List.find (null . proofIncompleteNodes) proofs' of
-          Nothing -> go (proofs ++ fmap (fuel - 1,) proofs')
+          Nothing -> go (fmap (fuel - 1,) proofs' ++ proofs)
           Just proof' -> pure (Just (fuel, proof'))
 
 -- | The ProverM monad non-deterministically manipulate a proof.

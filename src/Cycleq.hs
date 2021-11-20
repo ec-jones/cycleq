@@ -78,10 +78,10 @@ plugin =
                       t1 <- liftIO getCPUTime
                       pure (t1 - t0, proofEdgeTime proof)
 
-            res <- foldM (prove 1) Map.empty (flattenBinds prog)
+            res <- foldM (prove 10) Map.empty (flattenBinds prog)
 
-            putMsgS ("No. Problems: " ++ show (Map.size res))
-            putMsgS ("Total solved: " ++ show (Map.size $ Map.filter isJust res))
+            -- putMsgS ("No. Problems: " ++ show (Map.size res))
+            -- putMsgS ("Total solved: " ++ show (Map.size $ Map.filter isJust res))
             liftIO $ writeFile "benchmark.tex" (showMark res)
             pure mguts
         )
@@ -92,7 +92,7 @@ showMark bm =
   unlines $ pre ++ titles : Map.foldrWithKey (\k v ss -> entry k v : ss) post bm
   where
     pre = ["\\begin{tabular}{llll}", "\\toprule"]
-    titles = concat $ List.intersperse " & " ["Name", "Total Time (ms)", "Edge Time (ms)", "Edge Time (%)"] ++ ["\\\\\\midrule"]
+    titles = concat $ List.intersperse " & " ["Name", "Total Time (ms)", "Edge Time (ms)", "Edge Time (\\%)"] ++ ["\\\\\\midrule"]
     post = ["\\bottomrule", "\\end{tabular}"]
 
     -- Format an entry
