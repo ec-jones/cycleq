@@ -1,5 +1,0 @@
-packages:.
-profiling: True
-profiling-detail: all-functions
-
-tests: True

@@ -1,12 +1,15 @@
+{-# LANGUAGE TemplateHaskellQuotes #-}
+
 -- Property from "Case-Analysis for Rippling and Inductive Proof",
 -- Moa Johansson, Lucas Dixon and Alan Bundy, ITP 2010
 -- https://github.com/tip-org/benchmarks/blob/master/original/isaplanner/Properties.hs
 
 module Properties where
 
-import Cycleq
-import Prelude (Bool(..))
+import CycleQ
+import Prelude (Bool (..))
 
+{-# ANN prop_01 defaultParams #-}
 prop_01 :: Nat -> List a -> Equation
 prop_01 n xs =
   take n xs ++ drop n xs === xs
@@ -30,34 +33,42 @@ prop_01 n xs =
 -- prop_05 n x xs
 --   = n === x ==> S (count n xs) === count n (x : xs)
 
+{-# ANN prop_06 defaultParams #-}
 prop_06 :: Nat -> Nat -> Equation
 prop_06 n m =
   n - (n + m) === Z
 
+{-# ANN prop_07 defaultParams #-}
 prop_07 :: Nat -> Nat -> Equation
 prop_07 n m =
   (n + m) - n === m
 
+{-# ANN prop_08 defaultParams #-}
 prop_08 :: Nat -> Nat -> Nat -> Equation
 prop_08 k m n =
   (k + m) - (k + n) === m - n
 
+{-# ANN prop_09 defaultParams #-}
 prop_09 :: Nat -> Nat -> Nat -> Equation
 prop_09 i j k =
   (i - j) - k === i - (j + k)
 
+{-# ANN prop_10 defaultParams #-}
 prop_10 :: Nat -> Equation
 prop_10 m =
   m - m === Z
 
+{-# ANN prop_11 defaultParams #-}
 prop_11 :: List a -> Equation
 prop_11 xs =
   drop Z xs === xs
 
+{-# ANN prop_12 defaultParams #-}
 prop_12 :: Nat -> (a -> b) -> List a -> Equation
 prop_12 n f xs =
   drop n (map f xs) === map f (drop n xs)
 
+{-# ANN prop_13 defaultParams #-}
 prop_13 :: Nat -> a -> List a -> Equation
 prop_13 n x xs =
   drop (S n) (Cons x xs) === drop n xs
@@ -77,14 +88,17 @@ prop_13 n x xs =
 -- prop_16 x xs
 --   = xs === Nil ==> last (Cons x xs) === x
 
+{-# ANN prop_17 defaultParams #-}
 prop_17 :: Nat -> Equation
 prop_17 n =
   n <= Z === n == Z
 
+{-# ANN prop_18 defaultParams #-}
 prop_18 :: Nat -> Nat -> Equation
 prop_18 i m =
   i < S (i + m) === True
 
+{-# ANN prop_19 defaultParams #-}
 prop_19 :: Nat -> List a -> Equation
 prop_19 n xs =
   len (drop n xs) === len xs - n
@@ -95,22 +109,27 @@ prop_19 n xs =
 -- prop_20 xs =
 --   len (sort xs) === len xs
 
+{-# ANN prop_21 defaultParams #-}
 prop_21 :: Nat -> Nat -> Equation
 prop_21 n m =
   n <= (n + m) === True
 
+{-# ANN prop_22 defaultParams #-}
 prop_22 :: Nat -> Nat -> Nat -> Equation
 prop_22 a b c =
   max (max a b) c === max a (max b c)
 
+{-# ANN prop_23 defaultParams #-}
 prop_23 :: Nat -> Nat -> Equation
 prop_23 a b =
   max a b === max b a
 
+{-# ANN prop_24 defaultParams #-}
 prop_24 :: Nat -> Nat -> Equation
 prop_24 a b =
   max a b == a === b <= a
 
+{-# ANN prop_25 defaultParams #-}
 prop_25 :: Nat -> Nat -> Equation
 prop_25 a b =
   max a b == b === a <= b
@@ -138,26 +157,32 @@ prop_25 a b =
 -- prop_30 x xs =
 --   x `elem` ins x xs === True
 
+{-# ANN prop_31 defaultParams #-}
 prop_31 :: Nat -> Nat -> Nat -> Equation
 prop_31 a b c =
   min (min a b) c === min a (min b c)
 
+{-# ANN prop_32 defaultParams #-}
 prop_32 :: Nat -> Nat -> Equation
 prop_32 a b =
   min a b === min b a
 
+{-# ANN prop_33 defaultParams #-}
 prop_33 :: Nat -> Nat -> Equation
 prop_33 a b =
   min a b == a === a <= b
 
+{-# ANN prop_34 defaultParams #-}
 prop_34 :: Nat -> Nat -> Equation
 prop_34 a b =
   min a b == b === b <= a
 
+{-# ANN prop_35 defaultParams #-}
 prop_35 :: List a -> Equation
 prop_35 xs =
   dropWhile (\_ -> False) xs === xs
 
+{-# ANN prop_36 defaultParams #-}
 prop_36 :: List a -> Equation
 prop_36 xs =
   takeWhile (\_ -> True) xs === xs
@@ -177,14 +202,17 @@ prop_36 xs =
 -- prop_39 n x xs =
 --   count n (Cons x Nil) + count n xs === count n (Cons x xs)
 
+{-# ANN prop_40 defaultParams #-}
 prop_40 :: List a -> Equation
 prop_40 xs =
   take Z xs === Nil
 
+{-# ANN prop_41 defaultParams #-}
 prop_41 :: Nat -> (a -> b) -> List a -> Equation
 prop_41 n f xs =
   take n (map f xs) === map f (take n xs)
 
+{-# ANN prop_42 defaultParams #-}
 prop_42 :: Nat -> a -> List a -> Equation
 prop_42 n x xs =
   take (S n) (Cons x xs) === Cons x (take n xs)
@@ -194,19 +222,22 @@ prop_42 n x xs =
 -- prop_43 p xs =
 --   takeWhile p xs ++ dropWhile p xs === xs
 
+{-# ANN prop_44 defaultParams #-}
 prop_44 :: a -> List a -> List a -> Equation
 prop_44 x xs ys =
   zip (Cons x xs) ys === zipConcat x xs ys
 
+{-# ANN prop_45 defaultParams #-}
 prop_45 :: a -> b -> List a -> List b -> Equation
 prop_45 x y xs ys =
   zip (Cons x xs) (Cons y ys) === Cons (x, y) (zip xs ys)
 
+{-# ANN prop_46 defaultParams #-}
 prop_46 :: List a -> Equation
 prop_46 xs =
   zip Nil xs === Nil
 
--- FAIL
+-- {-# ANN prop_47 defaultParams {fuel = 10, lemmas = ['maxComm], output = "proofs/height.svg"} #-}
 -- prop_47 :: Tree a -> Equation
 -- prop_47 a =
 --   height (mirror a) === height a
@@ -214,16 +245,19 @@ prop_46 xs =
 -- NA
 -- prop_48 :: List a -> Equation
 -- prop_48 xs
-  -- = not (null xs) ==> butlast xs ++ [last xs] === xs
+-- = not (null xs) ==> butlast xs ++ [last xs] === xs
 
+{-# ANN prop_49 defaultParams #-}
 prop_49 :: List a -> List a -> Equation
 prop_49 xs ys =
   butlast (xs ++ ys) === butlastConcat xs ys
 
+{-# ANN prop_50 defaultParams #-}
 prop_50 :: List a -> Equation
 prop_50 xs =
   butlast xs === take (len xs - S Z) xs
 
+{-# ANN prop_51 defaultParams #-}
 prop_51 :: List a -> a -> Equation
 prop_51 xs x =
   butlast (xs ++ Cons x Nil) === xs
@@ -244,14 +278,17 @@ prop_51 xs x =
 -- prop_54 n m =
 --   (m + n) - n === m
 
+{-# ANN prop_55 defaultParams #-}
 prop_55 :: Nat -> List a -> List a -> Equation
 prop_55 n xs ys =
   drop n (xs ++ ys) === drop n xs ++ drop (n - len xs) ys
 
+{-# ANN prop_56 defaultParams #-}
 prop_56 :: Nat -> Nat -> List a -> Equation
 prop_56 n m xs =
   drop n (drop m xs) === drop (n + m) xs
 
+{-# ANN prop_57 defaultParams #-}
 prop_57 :: Nat -> Nat -> List a -> Equation
 prop_57 n m xs =
   drop n (take m xs) === take (m - n) (drop n xs)
@@ -271,6 +308,7 @@ prop_57 n m xs =
 -- prop_60 xs ys
 --   = not (null ys) ==> last (xs ++ ys) === last ys
 
+{-# ANN prop_61 defaultParams #-}
 prop_61 :: List Nat -> List Nat -> Equation
 prop_61 xs ys =
   last (xs ++ ys) === lastOfTwo xs ys
@@ -284,6 +322,7 @@ prop_61 xs ys =
 -- prop_63 n xs
 --   = n < len xs ==> last (drop n xs) === last xs
 
+{-# ANN prop_64 defaultParams #-}
 prop_64 :: Nat -> List Nat -> Equation
 prop_64 x xs =
   last (xs ++ Cons x Nil) === x
@@ -298,6 +337,7 @@ prop_64 x xs =
 -- prop_66 p xs =
 --   len (filter p xs) <= len xs === True
 
+{-# ANN prop_67 defaultParams #-}
 prop_67 :: List a -> Equation
 prop_67 xs =
   len (butlast xs) === len xs - S Z
@@ -356,10 +396,12 @@ prop_67 xs =
 -- prop_78 xs =
 --   sorted (sort xs) === True
 
+{-# ANN prop_79 defaultParams #-}
 prop_79 :: Nat -> Nat -> Nat -> Equation
 prop_79 m n k =
   (S m - n) - S k === (m - n) - k
 
+{-# ANN prop_80 defaultParams #-}
 prop_80 :: Nat -> List a -> List a -> Equation
 prop_80 n xs ys =
   take n (xs ++ ys) === take n xs ++ take (n - len xs) ys
@@ -369,15 +411,18 @@ prop_80 n xs ys =
 -- prop_81 n m xs {- ys -} =
 --   take n (drop m xs) === drop m (take (n + m) xs)
 
+{-# ANN prop_82 defaultParams #-}
 prop_82 :: Nat -> List a -> List a -> Equation
 prop_82 n xs ys =
   take n (zip xs ys) === zip (take n xs) (take n ys)
 
+{-# ANN prop_83 defaultParams #-}
 prop_83 :: List a -> List a -> List a -> Equation
 prop_83 xs ys zs =
   zip (xs ++ ys) zs
     === zip xs (take (len xs) zs) ++ zip ys (drop (len xs) zs)
 
+{-# ANN prop_84 defaultParams #-}
 prop_84 :: List a -> List a -> List a -> Equation
 prop_84 xs ys zs =
   zip xs (ys ++ zs)
@@ -427,32 +472,32 @@ _ && _ = False
 (==) (S _) _ = False
 
 (<=) :: Nat -> Nat -> Bool
-Z     <= _     = True
-_     <= Z     = False
+Z <= _ = True
+_ <= Z = False
 (S x) <= (S y) = x <= y
 
 (<) :: Nat -> Nat -> Bool
-_     < Z     = False
-Z     < _     = True
+_ < Z = False
+Z < _ = True
 (S x) < (S y) = x < y
 
 (+) :: Nat -> Nat -> Nat
-Z     + y = y
+Z + y = y
 (S x) + y = S (x + y)
 
 (-) :: Nat -> Nat -> Nat
-Z     - _     = Z
-x     - Z     = x
+Z - _ = Z
+x - Z = x
 (S x) - (S y) = x - y
 
 min :: Nat -> Nat -> Nat
-min Z     _    = Z
-min _ Z     = Z
+min Z _ = Z
+min _ Z = Z
 min (S x) (S y) = S (min x y)
 
 max :: Nat -> Nat -> Nat
-max Z     y     = y             --
-max x     Z     = x
+max Z y = y --
+max x Z = x
 max (S x) (S y) = S (max x y)
 
 -- List functions
@@ -497,7 +542,7 @@ elem n (Cons x xs) =
 
 drop :: Nat -> List a -> List a
 drop Z xs = xs
-drop (S n) Nil = Nil 
+drop (S n) Nil = Nil
 drop (S n) (Cons x xs) = drop n xs
 
 take :: Nat -> List a -> List a
