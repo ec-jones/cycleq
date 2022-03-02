@@ -45,15 +45,18 @@ library
 
   default-language:   Haskell2010
 
-test-suite test
+test-suite benchmarks
   type:               exitcode-stdio-1.0   
 
   main-is:            IsaPlanner.hs
+
+  other-modules:      Mutual
 
   hs-source-dirs:     test
 
   build-depends:      base, cycleq
 
-  ghc-options:        -fplugin=CycleQ
+  ghc-options:        -fplugin CycleQ
+                      -fplugin-opt CycleQ:benchmark
 
   default-language:   Haskell2010

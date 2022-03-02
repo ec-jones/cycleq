@@ -17,14 +17,16 @@ import Control.Monad.Reader
 import Control.Monad.Writer
 import CycleQ.Environment
 import CycleQ.Equation
-import CycleQ.Proof ()
+import CycleQ.Proof
 import CycleQ.Prover
 import Data.Bifunctor
 import Data.Data
+import qualified Data.List as List
 import qualified Data.Map as Map
 import Data.Maybe
 import GHC.Plugins hiding (empty)
 import qualified Language.Haskell.TH as TH
+import Numeric (showFFloat)
 import System.CPUTime
 
 -- | CycleQ parameters.
@@ -55,13 +57,13 @@ plugin :: Plugin
 plugin =
   defaultPlugin
     { installCoreToDos = \opts todo ->
-        pure (CoreDoPluginPass "CycleQ" cycleq : todo),
+        pure (CoreDoPluginPass "CycleQ" (cycleq ("benchmark" `elem` opts)) : todo),
       pluginRecompile = purePlugin
     }
 
--- | Run cycleq proof earch on annotated top-level definitions.
-cycleq :: ModGuts -> CoreM ModGuts
-cycleq mguts = do
+-- | Run the cycleq prover on each annotated problem in a module.
+cycleq :: Bool -> ModGuts -> CoreM ModGuts
+cycleq benchmark mguts = do
   results <-
     foldM
       ( \results -> \case
@@ -69,44 +71,50 @@ cycleq mguts = do
             | Just params <- (fromSerialized deserializeWithData ann :: Maybe (CycleQ TH.Name)),
               Just goal <- ghcNameToEquation prog goalName -> do
               params' <- traverse (thNameToEquation prog) params
-              putMsg (text "Property:" <+> ppr goalName)
 
-              -- -- Output proof
-              -- prover env (fuel params) (lemmas params') [goal] >>= \case
-              --   (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
-              --   (Just proverState, Sum edgeInteger) ->
-              --     unless (output params == "\0") $
-              --       drawProof (proofGraph proverState) (output params')
-
-              -- Benchmarking
-              times <- replicateM 1 (benchmark params' goal)
-              pure (Map.insert (occNameString $ occName goalName) times results)
+              if benchmark
+                then do
+                  -- Benchmarking
+                  times <- replicateM 10 (runBenchmark params' goal)
+                  pure (Map.insert (occNameString $ occName goalName) times results)
+                else do
+                  -- Output proof
+                  prover env (fuel params) (lemmas params') [goal] >>= \case
+                    (Nothing, _) -> putMsgS "Fail!"
+                    (Just proverState, Sum edgeInteger) -> do
+                      putMsgS "Success!"
+                      unless (output params == "\0") $
+                        drawProof (proofGraph proverState) (output params')
+                  pure results
           _ -> pure results
       )
       Map.empty
-      (mg_anns mguts)
-  liftIO $
-    writeFile "benchmarks" (show $ bimap average average . unzip <$> results)
+      (mg_anns mguts)  
+
+  -- Write out benchmarks
+  when benchmark $
+    liftIO $
+      writeFile ("benchmarks - " ++ moduleNameString (moduleName (mg_module mguts)) ++ "tex") (showBenchmark results)
+
   pure mguts
   where
+    -- Clean-up program.
     prog :: CoreProgram
     prog = cleanProg $ mg_binds mguts
 
+    -- Top-level program environment.
     env :: ProgramEnv
     env = mkProgramEnv prog
 
-    average :: [Float] -> Float
-    average xs = sum xs / fromIntegral (length xs)
-
     -- Run a particular benchmark once.
-    benchmark :: CycleQ Equation -> Equation -> CoreM (Float, Float)
-    benchmark params goal = do
+    runBenchmark :: CycleQ Equation -> Equation -> CoreM (Double, Double)
+    runBenchmark params goal = do
       t0 <- liftIO getCPUTime
       prover env (fuel params) (lemmas params) [goal] >>= \case
         (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
         (Just proverState, Sum edgeInteger) -> do
           t1 <- liftIO getCPUTime
-          let totalTime, edgeTime :: Float
+          let totalTime, edgeTime :: Double
               totalTime = fromIntegral (t1 - t0) / 1000000000
               edgeTime = fromIntegral edgeInteger / 1000000000
           pure (totalTime, edgeTime)
@@ -167,3 +175,29 @@ cleanProg prog = map goBind prog
 
     goAlt :: CoreAlt -> CoreAlt
     goAlt (ac, xs, rhs) = (ac, xs, go rhs)
+
+-- | Convert benchmark to latex tabular
+showBenchmark :: Map.Map String [(Double, Double)] -> String
+showBenchmark bm =
+  unlines $ pre ++ titles : Map.foldrWithKey (\k v ss -> entry k v : ss) post bm
+  where
+    pre, post :: [String]
+    pre = ["\\begin{tabular}{|llll|}", "\\hline"]
+    post = ["\\hline", "\\end{tabular}"]
+
+    titles :: String
+    titles = concat $ List.intersperse " & " ["Name", "Total Time (ms)", "Edge Time (ms)", "Edge Time (\\%)"] ++ ["\\\\\\hline"]
+
+    entry :: String -> [(Double, Double)] -> String
+    entry n sts =
+      let total = average (fmap fst sts)
+          edge = average (fmap snd sts)
+          percent = 100 * (edge / total)
+       in concat $
+            List.intersperse
+              " & "
+              [n, showFFloat (Just 3) total "", showFFloat (Just 3) edge "", showFFloat (Just 3) percent ""]
+              ++ ["\\\\\\midrule"]
+
+    average :: [Double] -> Double
+    average xs = sum xs / fromIntegral (length xs)

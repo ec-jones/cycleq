@@ -1,7 +1,7 @@
-module M where
+module Mutual where
 
+import CycleQ
 import Prelude ()
-import Cycleq
 
 data Nat
   = Z
@@ -13,10 +13,13 @@ id x = x
 comp :: (b -> c) -> (a -> b) -> a -> c
 comp f g x = f (g x)
 
-data Tm a =
-  Var a | Cst Nat | App (Expr a) (Expr a)
+data Tm a
+  = Var a
+  | Cst Nat
+  | App (Expr a) (Expr a)
 
-data Expr a = MkExpr (Tm a) Nat
+data Expr a
+  = MkExpr (Tm a) Nat
 
 mapE :: (a -> b) -> Expr a -> Expr b
 mapE f (MkExpr t n) = MkExpr (mapT f t) n
@@ -59,21 +62,26 @@ argsT (Var x) = Nil
 argsT (Cst n) = Nil
 argsT (App e1 e2) = Cons e2 (argsE e1)
 
+{-# ANN prop_1 defaultParams #-}
 prop_1 :: Expr a -> Equation
 prop_1 e = mapE id e === e
 
+{-# ANN prop_2 defaultParams #-}
 prop_2 :: (b -> c) -> (a -> b) -> Expr a -> Equation
 prop_2 f g e =
   mapE (f `comp` g) e === mapE f (mapE g e)
 
+{-# ANN prop_3 defaultParams #-}
 prop_3 :: (a -> b) -> Expr a -> Equation
 prop_3 f e =
   argsE (mapE f e) === map (mapE f) (argsE e)
 
+{-# ANN prop_4 defaultParams #-}
 prop_4 :: (a -> b) -> Tm a -> Equation
 prop_4 f e =
   argsT (mapT f e) === map (mapE f) (argsT e)
 
+{-# ANN prop_5 defaultParams #-}
 prop_5 :: (a -> b) -> Expr a -> Equation
 prop_5 f e =
   headE (mapE f e) === mapE f (headE e)

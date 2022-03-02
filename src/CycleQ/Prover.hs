@@ -359,8 +359,8 @@ newtype ProverM env a = ProverM
 instance MonadWriter (Sum Integer) (ProverM env) where
   tell delta = ProverM $ lift $ lift $ lift $ tell delta
 
--- listen (ProverM m) = ProverM $
---   lift $ lift $ lift $ listen _
+  listen = error "This method is not supported!"
+  pass = error "This method is not supported!"
 
 instance MonadUnique (ProverM env) where
   getUniqueSupplyM = ProverM $ lift $ lift $ lift $ lift getUniqueSupplyM
