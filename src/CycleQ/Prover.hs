@@ -1,9 +1,9 @@
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
-{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TupleSections #-}
 
 -- |
 -- Module: Cycleq.Prover
@@ -21,9 +21,9 @@ import Control.Monad.Writer
 import CycleQ.Edge
 import CycleQ.Environment
 import CycleQ.Equation
-import CycleQ.Proof (lookupNode)
 import qualified CycleQ.Proof as Proof
 import CycleQ.Reduction
+import Data.Bifunctor
 import qualified Data.List as List
 import GHC.Core.TyCo.Rep
 import GHC.Plugins hiding (empty, trace)
@@ -97,8 +97,7 @@ prover env fuel lemmas goals = runWriterT $ runReaderT (go [initProver fuel lemm
     go :: [ProverState] -> ReaderT ProgramEnv (WriterT (Sum Integer) CoreM) (Maybe ProverState)
     go [] = pure Nothing
     go stss@(st : sts)
-      | null (goalNodes st) =
-        pure (Just st )
+      | null (goalNodes st) = pure (Just st)
       | proverFuel st <= 0 = go sts
       | otherwise = do
         nextStates <- runProverM st (expand False)
@@ -123,6 +122,8 @@ expand trace = do
 
           when trace $
             pprTraceM "Reduce:" (ppr [goalNode'])
+
+          expand trace
         Right stuckOn ->
           ( do
               -- Reflexivity
@@ -165,7 +166,7 @@ expand trace = do
             `cut` ( do
                       -- Superposition
                       lemmaNode <- msum (fmap pure lemmas) -- Select a lemma node
-                      let lemmaEquation = lookupNode lemmaNode proof
+                      let lemmaEquation = Proof.lookupNode lemmaNode proof
 
                       -- Rewrite current goal
                       (subst, goalEquation') <- superpose goalEquation lemmaEquation
@@ -207,15 +208,17 @@ expand trace = do
 
 -- | Try to reduce either side of an equation.
 reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
-reduceEquation goal@(Equation xs lhs rhs) = withEnv (intoEquationEnv xs) $ do
-  (equation, isProper, stuckOn) <- runReductT goal $ do
-    lhs' <- reduce lhs
-    rhs' <- reduce rhs
-    pure (Equation xs lhs' rhs')
-  pure $
-    if isProper
-      then Left equation
-      else Right stuckOn
+reduceEquation goal@(Equation xs lhs rhs) = do
+  scope <- asks progInScopeSet
+  withEnv (intoEquationEnv xs) $ do
+    (equation, isProper, stuckOn) <- runReductT goal $ do
+      lhs' <- reduce lhs
+      rhs' <- reduce rhs
+      pure (Equation xs lhs' rhs')
+    pure $
+      if isProper
+        then Left (prune (getInScopeVars scope) equation)
+        else Right stuckOn
 
 -- -- | Fail if an equation is absurd.
 -- checkNotAbsurd :: Equation -> ProverM env ()
@@ -234,11 +237,12 @@ refl (Equation xs lhs rhs) = do
   guard (eqExpr scope lhs rhs)
 
 -- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
-consCong :: Equation -> ProverM env [Equation]
-consCong (Equation xs lhs rhs) =
+consCong :: Equation -> ProverM ProgramEnv [Equation]
+consCong (Equation xs lhs rhs) = do
+  scope <- asks progInScopeSet
   case (,) <$> viewNormalForm lhs <*> viewNormalForm rhs of
     Just (Left (con, args), Left (con', args'))
-      | con == con' -> pure (zipWith (Equation xs) args args')
+      | con == con' -> pure (prune (getInScopeVars scope) <$> zipWith (Equation xs) args args')
     Just (Right lit, Right lit')
       | lit == lit' -> pure []
     nonMatch -> empty
@@ -267,20 +271,25 @@ freshVar ty = do
 -- | Rewrite the first equation with an instance of the second.
 superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
 superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
+  progScope <- asks progInScopeSet
   scope <- asks (envInScopeSet . intoEquationEnv xs)
   sub <- equationSubExprs goal
   guard (not (isVariableSubExpr sub))
-  withSubExpr sub $ \expr ->
-    ( do
-        guard (isNonVar lhs)
-        subst <- match ys scope lhs expr
-        pure (subst, substExpr subst rhs)
-    )
-      <|> ( do
-              guard (isNonVar rhs)
-              subst <- match ys scope rhs expr
-              pure (subst, substExpr subst lhs)
+  second (prune (getInScopeVars progScope))
+    <$> withSubExpr
+      sub
+      ( \expr ->
+          ( do
+              guard (isNonVar lhs)
+              subst <- match ys scope lhs expr
+              pure (subst, substExpr subst rhs)
           )
+            <|> ( do
+                    guard (isNonVar rhs)
+                    subst <- match ys scope rhs expr
+                    pure (subst, substExpr subst lhs)
+                )
+      )
   where
     isNonVar (Var _) = False
     isNonVar _ = True
@@ -350,9 +359,8 @@ newtype ProverM env a = ProverM
 instance MonadWriter (Sum Integer) (ProverM env) where
   tell delta = ProverM $ lift $ lift $ lift $ tell delta
 
-  listen = undefined
-
-  pass = undefined
+-- listen (ProverM m) = ProverM $
+--   lift $ lift $ lift $ listen _
 
 instance MonadUnique (ProverM env) where
   getUniqueSupplyM = ProverM $ lift $ lift $ lift $ lift getUniqueSupplyM

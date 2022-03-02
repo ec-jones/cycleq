@@ -1,7 +1,7 @@
 -- |
 -- Module: Cycleq.Environment
 module CycleQ.Environment
-  ( ProgramEnv,
+  ( ProgramEnv (..),
     mkProgramEnv,
     EquationEnv (..),
     intoEquationEnv,

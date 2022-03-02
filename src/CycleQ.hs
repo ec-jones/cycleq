@@ -17,6 +17,7 @@ import Control.Monad.Reader
 import Control.Monad.Writer
 import CycleQ.Environment
 import CycleQ.Equation
+import CycleQ.Proof ()
 import CycleQ.Prover
 import Data.Bifunctor
 import Data.Data
@@ -61,8 +62,6 @@ plugin =
 -- | Run cycleq proof earch on annotated top-level definitions.
 cycleq :: ModGuts -> CoreM ModGuts
 cycleq mguts = do
-  let prog = cleanProg $ mg_binds mguts
-      env = mkProgramEnv prog
   results <-
     foldM
       ( \results -> \case
@@ -72,10 +71,15 @@ cycleq mguts = do
               params' <- traverse (thNameToEquation prog) params
               putMsg (text "Property:" <+> ppr goalName)
 
-              -- unless (output params == "\0") $
-              --   drawProof (proofGraph proverState) (output params)
+              -- -- Output proof
+              -- prover env (fuel params) (lemmas params') [goal] >>= \case
+              --   (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
+              --   (Just proverState, Sum edgeInteger) ->
+              --     unless (output params == "\0") $
+              --       drawProof (proofGraph proverState) (output params')
 
-              times <- replicateM 1 (benchmark env params' goal)
+              -- Benchmarking
+              times <- replicateM 1 (benchmark params' goal)
               pure (Map.insert (occNameString $ occName goalName) times results)
           _ -> pure results
       )
@@ -85,21 +89,27 @@ cycleq mguts = do
     writeFile "benchmarks" (show $ bimap average average . unzip <$> results)
   pure mguts
   where
+    prog :: CoreProgram
+    prog = cleanProg $ mg_binds mguts
+
+    env :: ProgramEnv
+    env = mkProgramEnv prog
+
     average :: [Float] -> Float
     average xs = sum xs / fromIntegral (length xs)
 
--- | Run a particular benchmark once.
-benchmark :: ProgramEnv -> CycleQ Equation -> Equation -> CoreM (Float, Float)
-benchmark env params goal = do
-  t0 <- liftIO getCPUTime
-  prover env (fuel params) (lemmas params) [goal] >>= \case
-    (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
-    (Just proverState, Sum edgeInteger) -> do
-      t1 <- liftIO getCPUTime
-      let totalTime, edgeTime :: Float
-          totalTime = fromIntegral (t1 - t0) / 1000000000
-          edgeTime = fromIntegral (t1 - t0) / 1000000000
-      pure (totalTime, edgeTime)
+    -- Run a particular benchmark once.
+    benchmark :: CycleQ Equation -> Equation -> CoreM (Float, Float)
+    benchmark params goal = do
+      t0 <- liftIO getCPUTime
+      prover env (fuel params) (lemmas params) [goal] >>= \case
+        (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
+        (Just proverState, Sum edgeInteger) -> do
+          t1 <- liftIO getCPUTime
+          let totalTime, edgeTime :: Float
+              totalTime = fromIntegral (t1 - t0) / 1000000000
+              edgeTime = fromIntegral edgeInteger / 1000000000
+          pure (totalTime, edgeTime)
 
 -- | Find an equation from a TemplateHaskell name.
 thNameToEquation :: CoreProgram -> TH.Name -> CoreM Equation
@@ -123,58 +133,6 @@ ghcNameToEquation prog name =
           _ -> Nothing
       )
       prog
-
--- cycleq :: [CommandLineOption] -> ModGuts -> CoreM ModGuts
--- cycleq opts mguts = do
---   let prog = cleanProg (mg_binds mguts)
---       -- Attempt to prove goal with n iterations
---       -- prove :: Int -> Map.Map Int (Maybe ([(Integer, Integer)], Equation)) -> _ -> CoreM (Map.Map Int (Maybe ([(Integer, Integer)], Equation)))
---       prove n results (x, goal) =
---         case "prop_" `List.stripPrefix` occNameString (occName x) of
---           Nothing -> pure results
---           Just goalName -> do
---             putMsgS ("Attempting to prove: " ++ goalName)
---             let equation = fromJust $ equationFromCore goal
---             t0 <- liftIO getCPUTime
---             let lemmas = Map.elems $ Map.mapMaybe (fmap snd) results :: [Equation]
---             runReaderT (prover False problem) (mkProgramEnv prog) >>= \case
---               Nothing -> pure (Map.insert (read goalName :: Int) Nothing results)
---               Just (fuel, proof) -> do
---                 t1 <- liftIO getCPUTime
---                 -- putMsgS "Success!"
---                 putMsgS ("Fuel: " ++ show fuel)
---                 drawProof proof "output.svg"
---                 ts <- replicateM (n - 1) (go lemmas equation)
---                 putMsgS
---                   ( "Total time: "
---                       ++ showFFloat
---                         (Just 2)
---                         (fromIntegral (t1 - t0) / fromIntegral 1000000000)
---                         ""
---                   )
---                 putMsgS
---                   ( "Edge time: "
---                       ++ showFFloat
---                         (Just 2)
---                         (fromIntegral (proofEdgeTime proof) / fromIntegral 1000000000)
---                         ""
---                   )
---                 pure (Map.insert (read goalName) (Just ((t1 - t0, proofEdgeTime proof) : ts, equation)) results)
---       -- Iterate
---       go lemmas equation = do
---         t0 <- liftIO getCPUTime
---         runReaderT (prover False lemmas equation) (mkProgramEnv prog) >>= \case
---           Nothing -> pprPanic "Unexpected proof failure!" (ppr equation)
---           Just (_, proof) -> do
---             t1 <- liftIO getCPUTime
---             pure (t1 - t0, proofEdgeTime proof)
-
---   res <- foldM (prove 0) (Map.empty) (flattenBinds prog)
-
---   -- putMsgS ("No. Problems: " ++ show (Map.size res))
---   -- putMsgS ("Total solved: " ++ show (Map.size $ Map.filter isJust res))
---   -- liftIO $ writeFile "benchmark.tex" (showMark res)
---   pure mguts
 
 -- | Clean up a core program by removing ticks and join points.
 cleanProg :: CoreProgram -> CoreProgram

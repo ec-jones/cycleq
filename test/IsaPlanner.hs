@@ -1,10 +1,8 @@
-{-# LANGUAGE TemplateHaskellQuotes #-}
-
 -- Property from "Case-Analysis for Rippling and Inductive Proof",
 -- Moa Johansson, Lucas Dixon and Alan Bundy, ITP 2010
 -- https://github.com/tip-org/benchmarks/blob/master/original/isaplanner/Properties.hs
 
-module Properties where
+module IsaPlanner where
 
 import CycleQ
 import Prelude (Bool (..))
@@ -293,10 +291,12 @@ prop_57 :: Nat -> Nat -> List a -> Equation
 prop_57 n m xs =
   drop n (take m xs) === take (m - n) (drop n xs)
 
--- FAIL
--- prop_58 :: Nat -> List a -> List a -> Equation
--- prop_58 n xs ys =
---   drop n (zip xs ys) === zip (drop n xs) (drop n ys)
+{-# ANN prop_58 defaultParams { output = "proofs/58.svg" } #-}
+prop_58 :: Nat -> List a -> List a -> Equation
+prop_58 n xs ys =
+  drop n (zip xs ys) === zip (drop n xs) (drop n ys)
+
+---
 
 -- NA
 -- prop_59 :: List a -> List a -> Equation

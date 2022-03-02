@@ -42,15 +42,15 @@ instance Outputable Equation where
 -- | Print an equation with explicit variable quantification.
 pprQualified :: Equation -> SDoc
 pprQualified eq@(Equation xs _ _)
-  | not (null xs) = char '∀' <+> interpp'SP xs GHC.Plugins.<> dot <+> ppr eq
+  | not (null xs) = char '∀' GHC.Plugins.<> interpp'SP xs GHC.Plugins.<> dot <+> ppr eq
   | otherwise = ppr eq
 
 -- | Remove redundant free variables.
-prune :: Equation -> Equation
-prune (Equation _ lhs rhs) =
-  let xs = exprFreeVarsDSet lhs
-      ys = exprFreeVarsDSet rhs
-   in Equation (dVarSetElems (unionDVarSet xs ys)) lhs rhs
+prune :: VarSet -> Equation -> Equation
+prune scope (Equation _ lhs rhs) =
+  let xs = exprFreeIds lhs
+      ys = exprFreeIds rhs
+   in Equation (nonDetEltsUniqSet (unionVarSet xs ys `minusVarSet` scope)) lhs rhs
 
 -- | Print CoreExpr compactly without metadata.
 pprUserExpr :: (SDoc -> SDoc) -> CoreExpr -> SDoc
@@ -104,10 +104,11 @@ root expr = SubExpr expr id
 exprSubExprs :: Alternative f => CoreExpr -> f (SubExpr CoreExpr)
 exprSubExprs (Var x) = pure (root (Var x))
 exprSubExprs (Lit lit) = pure (root (Lit lit))
-exprSubExprs (App fun arg) =
-  pure (root (App fun arg))
-    <|> fmap (`App` arg) <$> exprSubExprs fun
-    <|> fmap (App fun) <$> exprSubExprs arg
+exprSubExprs (App fun arg)
+  | isValArg arg =
+      pure (root (App fun arg))
+        <|> fmap (App fun) <$> exprSubExprs arg
+  | otherwise = pure (root (App fun arg))
 exprSubExprs (Lam x body) =
   pure (root (Lam x body))
     <|> fmap (Lam x) <$> exprSubExprs body
