@@ -39,7 +39,7 @@ data CycleQ a = CycleQ
 defaultParams :: CycleQ TH.Name
 defaultParams =
   CycleQ
-    { fuel = 11,
+    { fuel = 12,
       output = "\0",
       lemmas = []
     }
