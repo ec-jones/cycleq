@@ -12,6 +12,7 @@ module CycleQ
   )
 where
 
+import System.IO
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Writer
@@ -64,6 +65,15 @@ plugin =
 -- | Run the cycleq prover on each annotated problem in a module.
 cycleq :: Bool -> ModGuts -> CoreM ModGuts
 cycleq benchmark mguts = do
+  let modName = moduleNameString (moduleName (mg_module mguts))
+  
+  iters <- if benchmark
+             then liftIO $ do
+               putStr ("Benchmarking " ++ modName ++ "\nNo. of runs: ")
+               hFlush stdout
+               readLn
+             else pure 0
+  
   results <-
     foldM
       ( \results -> \case
@@ -71,12 +81,14 @@ cycleq benchmark mguts = do
             | Just params <- (fromSerialized deserializeWithData ann :: Maybe (CycleQ TH.Name)),
               Just goal <- ghcNameToEquation prog goalName -> do
               params' <- traverse (thNameToEquation prog) params
+              putMsg (text "Proving:" <+> ppr goalName)
 
               if benchmark
                 then do
                   -- Benchmarking
-                  times <- replicateM 10 (runBenchmark params' goal)
+                  times <- catMaybes <$> replicateM iters (runBenchmark params' goal)
                   pure (Map.insert (occNameString $ occName goalName) times results)
+                  
                 else do
                   -- Output proof
                   prover env (fuel params) (lemmas params') [goal] >>= \case
@@ -86,6 +98,7 @@ cycleq benchmark mguts = do
                       unless (output params == "\0") $
                         drawProof (proofGraph proverState) (output params')
                   pure results
+                  
           _ -> pure results
       )
       Map.empty
@@ -94,7 +107,7 @@ cycleq benchmark mguts = do
   -- Write out benchmarks
   when benchmark $
     liftIO $
-      writeFile ("benchmarks - " ++ moduleNameString (moduleName (mg_module mguts)) ++ "tex") (showBenchmark results)
+      writeFile ("benchmarks - " ++ modName ++ ".tex") (showBenchmark results)
 
   pure mguts
   where
@@ -107,17 +120,19 @@ cycleq benchmark mguts = do
     env = mkProgramEnv prog
 
     -- Run a particular benchmark once.
-    runBenchmark :: CycleQ Equation -> Equation -> CoreM (Double, Double)
+    runBenchmark :: CycleQ Equation -> Equation -> CoreM (Maybe (Double, Double))
     runBenchmark params goal = do
       t0 <- liftIO getCPUTime
       prover env (fuel params) (lemmas params) [goal] >>= \case
-        (Nothing, _) -> pprPanic "Failed to prove:" (ppr goal)
+        (Nothing, _) -> do
+          putMsgS "Fail!"
+          pure Nothing
         (Just proverState, Sum edgeInteger) -> do
           t1 <- liftIO getCPUTime
           let totalTime, edgeTime :: Double
               totalTime = fromIntegral (t1 - t0) / 1000000000
               edgeTime = fromIntegral edgeInteger / 1000000000
-          pure (totalTime, edgeTime)
+          pure (Just (totalTime, edgeTime))
 
 -- | Find an equation from a TemplateHaskell name.
 thNameToEquation :: CoreProgram -> TH.Name -> CoreM Equation
