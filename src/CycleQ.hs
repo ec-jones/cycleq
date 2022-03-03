@@ -12,7 +12,6 @@ module CycleQ
   )
 where
 
-import System.IO
 import Control.Monad
 import Control.Monad.Reader
 import Control.Monad.Writer
@@ -29,6 +28,7 @@ import GHC.Plugins hiding (empty)
 import qualified Language.Haskell.TH as TH
 import Numeric (showFFloat)
 import System.CPUTime
+import System.IO
 
 -- | CycleQ parameters.
 data CycleQ a = CycleQ
@@ -66,14 +66,15 @@ plugin =
 cycleq :: Bool -> ModGuts -> CoreM ModGuts
 cycleq benchmark mguts = do
   let modName = moduleNameString (moduleName (mg_module mguts))
-  
-  iters <- if benchmark
-             then liftIO $ do
-               putStr ("Benchmarking " ++ modName ++ "\nNo. of runs: ")
-               hFlush stdout
-               readLn
-             else pure 0
-  
+
+  iters <-
+    if benchmark
+      then liftIO $ do
+        putStr ("Benchmarking " ++ modName ++ "\nNo. of runs: ")
+        hFlush stdout
+        readLn
+      else pure 0
+
   results <-
     foldM
       ( \results -> \case
@@ -81,16 +82,16 @@ cycleq benchmark mguts = do
             | Just params <- (fromSerialized deserializeWithData ann :: Maybe (CycleQ TH.Name)),
               Just goal <- ghcNameToEquation prog goalName -> do
               params' <- traverse (thNameToEquation prog) params
-              putMsg (text "Proving:" <+> ppr goalName)
 
               if benchmark
                 then do
                   -- Benchmarking
+                  putMsg (text "Benchmarking:" <+> ppr goalName)
                   times <- catMaybes <$> replicateM iters (runBenchmark params' goal)
                   pure (Map.insert (occNameString $ occName goalName) times results)
-                  
                 else do
                   -- Output proof
+                  putMsg (text "Attempting to prove:" <+> ppr goalName)
                   prover env (fuel params) (lemmas params') [goal] >>= \case
                     (Nothing, _) -> putMsgS "Fail!"
                     (Just proverState, Sum edgeInteger) -> do
@@ -98,16 +99,19 @@ cycleq benchmark mguts = do
                       unless (output params == "\0") $
                         drawProof (proofGraph proverState) (output params')
                   pure results
-                  
           _ -> pure results
       )
       Map.empty
-      (mg_anns mguts)  
+      (mg_anns mguts)
 
   -- Write out benchmarks
-  when benchmark $
+  when benchmark $ do
     liftIO $
       writeFile ("benchmarks - " ++ modName ++ ".tex") (showBenchmark results)
+
+    let averageTime :: Double
+        averageTime = average $ fmap (average . fmap fst) results
+    putMsgS ("Average time: " ++ show averageTime)
 
   pure mguts
   where
@@ -124,9 +128,7 @@ cycleq benchmark mguts = do
     runBenchmark params goal = do
       t0 <- liftIO getCPUTime
       prover env (fuel params) (lemmas params) [goal] >>= \case
-        (Nothing, _) -> do
-          putMsgS "Fail!"
-          pure Nothing
+        (Nothing, _) -> pure Nothing
         (Just proverState, Sum edgeInteger) -> do
           t1 <- liftIO getCPUTime
           let totalTime, edgeTime :: Double
@@ -214,5 +216,6 @@ showBenchmark bm =
               [n, showFFloat (Just 3) total "", showFFloat (Just 3) edge "", showFFloat (Just 3) percent ""]
               ++ ["\\\\\\midrule"]
 
-    average :: [Double] -> Double
-    average xs = sum xs / fromIntegral (length xs)
+-- | Take an average over a foldable structure.
+average :: Foldable f => f Double -> Double
+average xs = sum xs / fromIntegral (length xs)

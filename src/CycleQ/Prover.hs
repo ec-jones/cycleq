@@ -53,10 +53,14 @@ decreaseFuel :: ProverState -> ProverState
 decreaseFuel st = st {proverFuel = proverFuel st - 1}
 
 -- | Insert a new equation into a ProverState's proof graph.
-insertNode :: Equation -> ProverM env Int
-insertNode equation = state $ \st ->
+insertNode :: Bool -> Equation -> ProverM env Int
+insertNode prioritise equation = do
+  st <- get
   let (proof, nodeId) = Proof.insertNode equation (proofGraph st)
-   in (nodeId, st {goalNodes = nodeId : goalNodes st, proofGraph = proof})
+  if prioritise
+    then put st {goalNodes = nodeId : goalNodes st, proofGraph = proof}
+    else put st {goalNodes = List.insert nodeId $ goalNodes st, proofGraph = proof}
+  pure nodeId
 
 -- | Mark a node as suitable for superposition.
 markNodeAsLemma :: Int -> ProverM env ()
@@ -117,7 +121,7 @@ expand trace = do
 
       reduceEquation goalEquation >>= \case
         Left reductEquation -> do
-          goalNode' <- insertNode reductEquation
+          goalNode' <- insertNode False reductEquation
           insertEdge goalNode goalNode' (identityEdge goalEquation reductEquation)
 
           when trace $
@@ -140,7 +144,7 @@ expand trace = do
                       goalNodes' <-
                         mapM
                           ( \goalEquation' -> do
-                              goalNode' <- insertNode goalEquation'
+                              goalNode' <- insertNode True goalEquation'
                               insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
                               pure goalNode'
                           )
@@ -155,7 +159,7 @@ expand trace = do
                       -- Function Extensionality
                       markNodeAsLemma goalNode
                       goalEquation' <- funExt goalEquation
-                      goalNode' <- insertNode goalEquation'
+                      goalNode' <- insertNode True goalEquation'
                       insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
 
                       when trace $
@@ -170,7 +174,7 @@ expand trace = do
 
                       -- Rewrite current goal
                       (subst, goalEquation') <- superpose goalEquation lemmaEquation
-                      goalNode' <- insertNode goalEquation'
+                      goalNode' <- insertNode False goalEquation'
 
                       -- Add edges
                       insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
@@ -185,21 +189,22 @@ expand trace = do
                           Nothing -> empty
                           Just x
                             | TyConApp dty tyargs <- idType x -> do
+                              cases <- casesOf dty tyargs
                               goalNodes' <-
-                                casesOf dty tyargs
-                                  >>= mapM
-                                    ( \(k, fresh) -> do
-                                        let scope = mkInScopeSet (mkVarSet fresh)
-                                            subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
-                                            goalEquation' =
-                                              Equation
-                                                (fresh ++ (x `List.delete` xs))
-                                                (substExpr subst lhs)
-                                                (substExpr subst rhs)
-                                        goalNode' <- insertNode goalEquation'
-                                        insertEdge goalNode goalNode' (caseEdge x fresh goalEquation goalEquation')
-                                        pure goalNode'
-                                    )
+                                forM
+                                  cases
+                                  ( \(k, fresh) -> do
+                                      let scope = mkInScopeSet (mkVarSet fresh)
+                                          subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
+                                          goalEquation' =
+                                            Equation
+                                              (fresh ++ (x `List.delete` xs))
+                                              (substExpr subst lhs)
+                                              (substExpr subst rhs)
+                                      goalNode' <- insertNode True goalEquation'
+                                      insertEdge goalNode goalNode' (caseEdge x fresh goalEquation goalEquation')
+                                      pure goalNode'
+                                  )
 
                               when trace $
                                 pprTraceM "Case:" (ppr goalNodes')

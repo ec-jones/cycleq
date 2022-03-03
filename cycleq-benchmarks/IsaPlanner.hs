@@ -235,7 +235,7 @@ prop_46 :: List a -> Equation
 prop_46 xs =
   zip Nil xs === Nil
 
--- {-# ANN prop_47 defaultParams {fuel = 10, lemmas = ['maxComm], output = "proofs/height.svg"} #-}
+-- FAIL
 -- prop_47 :: Tree a -> Equation
 -- prop_47 a =
 --   height (mirror a) === height a
@@ -291,12 +291,10 @@ prop_57 :: Nat -> Nat -> List a -> Equation
 prop_57 n m xs =
   drop n (take m xs) === take (m - n) (drop n xs)
 
-{-# ANN prop_58 defaultParams { output = "proofs/58.svg" } #-}
+{-# ANN prop_58 defaultParams #-}
 prop_58 :: Nat -> List a -> List a -> Equation
 prop_58 n xs ys =
   drop n (zip xs ys) === zip (drop n xs) (drop n ys)
-
----
 
 -- NA
 -- prop_59 :: List a -> List a -> Equation

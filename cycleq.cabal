@@ -46,7 +46,8 @@ library
   default-language:   Haskell2010
 
 library cycleq-benchmarks
-  exposed-modules:    IsaPlanner, Mutual
+  exposed-modules:    IsaPlanner,
+                      Mutual
 
   hs-source-dirs:     cycleq-benchmarks
 
