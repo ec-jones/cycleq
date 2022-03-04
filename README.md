@@ -1,13 +1,13 @@
 # Getting Started
 
 We have provided a virtual machine image containing our CycleQ tool and benchmark data.
-The image is a standard Ubuntu 20.04.4 LTS minimal install, to which we added ghc-9.0.2 and cabal-3.0 (for compiling and running the artifact) and graphviz (for visualising proofs).
+The image is a standard Ubuntu 20.04.4 LTS minimal install, to which we added ghc-9.0.2 and cabal-3.6.2.0 (for compiling and running the artifact) and graphviz (for visualising proofs).
 The virtual machine image was created using Virtual Box 6.1.32 on a Windows 10 host.
 
 To get started log in with the user name and password "pldi22", this may be done automatically.
 On the desktop you will find the CycleQ directory containing the tool and a copy of this document explaining, in the following sections, how to use and evaluate it. 
 
-During the prepration of this artifact, we noticed a bug that we have since fixed. Consequently, the results supplied here, and in the version of the paper attached to the artifact, differ from those in the version of the paper originally submitted.
+During the prepration of this artifact, we noticed a bug that we have since fixed. Consequently, the results supplied here, and in the version of the paper attached to the artifact, differ slightly from those in the version of the paper originally submitted. No other changes have been made.
 
 # CycleQ: an efficient bassis for cyclic equational reasoning
 
