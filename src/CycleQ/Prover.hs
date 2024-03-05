@@ -1,12 +1,5 @@
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE TupleSections #-}
 
--- |
--- Module: Cycleq.Prover
 module CycleQ.Prover
   ( ProverState (..),
     prover,
@@ -15,340 +8,279 @@ where
 
 import Control.Applicative
 import Control.Monad.Logic
-import Control.Monad.Reader
 import Control.Monad.State
 import Control.Monad.Writer
-import CycleQ.Edge
-import CycleQ.Environment
-import CycleQ.Equation
-import qualified CycleQ.Proof as Proof
-import CycleQ.Reduction
-import Data.Bifunctor
-import qualified Data.List as List
-import GHC.Core.TyCo.Rep
-import GHC.Plugins hiding (empty, trace)
-import System.CPUTime
+import CycleQ.Proof.Proof qualified as Proof
+import CycleQ.Simplification
+import CycleQ.Syntax
+import CycleQ.Unique.Fresh
+import Data.List qualified as List
+import Data.Map qualified as Map
+import Data.Sequence qualified as Seq
 
--- | State of the proof search engine.
-data ProverState = ProverState
-  { -- | Remaining fuel
-    proverFuel :: Int,
-    -- | Partial proof graph
-    proofGraph :: !Proof.Proof,
-    -- | Nodes suitable for superposition
-    lemmaNodes :: [Int],
-    -- | Unjustified nodes
-    goalNodes :: [Int]
-  }
-
--- | Initialise prover state.
-initProver :: Int -> [Equation] -> [Equation] -> ProverState
-initProver fuel lemmas goals =
-  let (proof, ids) = List.mapAccumL (flip Proof.insertNode) Proof.emptyProof (lemmas ++ goals)
-      (lemmaIds, goalIds) = splitAt (length lemmas) ids
-   in ProverState fuel proof lemmaIds goalIds
-
--- | Decrease the state's fuel.
-decreaseFuel :: ProverState -> ProverState
-decreaseFuel st = st {proverFuel = proverFuel st - 1}
-
--- | Insert a new equation into a ProverState's proof graph.
-insertNode :: Bool -> Equation -> ProverM env Int
-insertNode prioritise equation = do
-  st <- get
-  let (proof, nodeId) = Proof.insertNode equation (proofGraph st)
-  if prioritise
-    then put st {goalNodes = nodeId : goalNodes st, proofGraph = proof}
-    else put st {goalNodes = List.insert nodeId $ goalNodes st, proofGraph = proof}
-  pure nodeId
-
--- | Mark a node as suitable for superposition.
-markNodeAsLemma :: Int -> ProverM env ()
-markNodeAsLemma i = modify $ \st ->
-  st {lemmaNodes = List.insert i (lemmaNodes st)}
-
--- | Insert edge into ProverState's proof graph recording the time ellapsed.
-insertEdge :: Int -> Int -> Edge -> ProverM env ()
-insertEdge source target edge = do
-  st <- get
-  t0 <- liftIO getCPUTime
-  let proof = Proof.insertEdge source target edge (proofGraph st)
-  guard (Proof.proofWellFounded proof)
-  t1 <- liftIO getCPUTime
-  tell (Sum (t1 - t0))
-  put
-    st {proofGraph = proof}
-
--- | Find the next unjustified node to expand.
-popGoal :: ProverM env (Maybe Int)
-popGoal = do
-  st <- get
-  case goalNodes st of
-    [] -> pure Nothing
-    (goal : goals) -> do
-      put st {goalNodes = goals}
-      pure (Just goal)
-
--- | Breadth-first search for a proof up-to a fixed depth.
+-- | Attempt to construct a proof.
 prover ::
-  ProgramEnv ->
-  Int ->
-  [Equation] ->
-  [Equation] ->
-  CoreM (Maybe ProverState, Sum Integer)
-prover env fuel lemmas goals = runWriterT $ runReaderT (go [initProver fuel lemmas goals]) env
+  ( ?program :: Program,
+    ?dataTypeEnv :: DataTypeEnv,
+    ?online :: Bool,
+    ?conditional :: Bool
+  ) =>
+  Int -> -- \^ Fuel
+  [Clause] -> -- \^ Lemmas
+  [Clause] -> -- \^ Goals
+  (Maybe ProverState, [Equation])
+prover fuel lemmas goals = go [] 0
   where
-    go :: [ProverState] -> ReaderT ProgramEnv (WriterT (Sum Integer) CoreM) (Maybe ProverState)
-    go [] = pure Nothing
-    go stss@(st : sts)
-      | null (goalNodes st) = pure (Just st)
-      | proverFuel st <= 0 = go sts
-      | otherwise = do
-        nextStates <- runProverM st (expand False)
-        go (fmap decreaseFuel nextStates ++ sts)
+    go :: [Equation] -> Int -> (Maybe ProverState, [Equation])
+    go acc depth
+      | depth > fuel = (Nothing, acc)
+      | otherwise =
+        case runProver loop (initProver depth lemmas goals) of
+          (Nothing, acc') -> go (acc ++ acc') (depth + 1)
+          (Just res, acc') -> (Just res, acc ++ acc') 
 
--- | Expand a proof tree.
-expand :: Bool -> ProverM ProgramEnv ()
-expand trace = do
-  popGoal >>= \case
-    Nothing -> pure ()
-    Just goalNode -> do
-      ProverState {lemmaNodes = lemmas, proofGraph = proof} <- get
-      let goalEquation@(Equation xs lhs rhs) = Proof.lookupNode goalNode proof
+    -- The main proof search loop
+    loop :: Prover s ()
+    loop =
+      -- Find a goal node
+      popGoal >>= \case
+        Nothing ->
+          -- If there are no further goals, check global correctness condition.
+          isGloballyCorrect
+        Just (node, clause) -> do
+          let (unorientated, res) = simplifyClause clause
 
-      when trace $
-        pprTraceM ("Goal " ++ show goalNode ++ ":") (ppr goalEquation)
+          unless (null unorientated) $ do
+            tell unorientated
 
-      reduceEquation goalEquation >>= \case
-        Left reductEquation -> do
-          goalNode' <- insertNode False reductEquation
-          insertEdge goalNode goalNode' (identityEdge goalEquation reductEquation)
+          case res of
+            Refl ->
+              -- Reflexivity or absurd hypotheses
+              pure ()
+            Absurd clause' -> do
+              -- Consequent of goal is absurd
 
-          when trace $
-            pprTraceM "Reduce:" (ppr [goalNode'])
+              node' <- insertNode (clause' {clauseGoal = Nothing})
+              insertEdge node node' (Proof.identityEdge (clauseVars clause') "")
+            Cong clauses -> do
+              -- Congruence of constructors
 
-          expand trace
-        Right stuckOn ->
-          ( do
-              -- Reflexivity
-              refl goalEquation
+              forM_ clauses $ \clause' -> do
+                node' <- insertNode clause'
+                insertEdge node node' (Proof.identityEdge (clauseVars clause') "")
+            FunEx argTy k -> do
+              -- Apply function extensionality
 
-              when trace $
-                pprTraceM "Refl:" (ppr ([] :: [Int]))
+              x <- freshVar argTy
+              node' <- insertNode (k x)
+              insertEdge node node' (Proof.identityEdge (clauseVars clause) "")
+            Reduce clause' -> do
+              -- Make a reduction step
 
-              expand trace
+              node' <- insertNode clause'
+              insertEdge node node' (Proof.identityEdge (clauseVars clause') "")
+            Stuck clause' -> do
+              decreaseFuel
+
+              chooseM
+                [ caseStep node clause',
+                  substStep node clause',
+                  refuteStep node clause'
+                ]
+          loop
+
+    substStep, caseStep, refuteStep :: Int -> Clause -> Prover s ()
+    -- Substitute a sub-expression
+    substStep node clause = do
+      -- Choose a lemma clause
+      (lemmaNode, lemmaClause) <- gets proverLemmas >>= choose
+      (tyTheta, theta, lemmaClause') <- freshenClause lemmaClause
+
+      -- Rewrite goal clause
+      let ?hypotheses = clauseHypRules clause
+      (theta', maybeCont) <- superpose clause lemmaClause'
+
+      -- Insert edge to lemma
+      let edge = Proof.substEdge (clauseVars clause) (theta `composeSubst` theta')
+      insertEdge node lemmaNode edge
+
+      case maybeCont of
+        Nothing -> pure ()
+        Just continuation -> do
+          -- Add continuation node
+          node' <- insertNode continuation
+          insertEdge node node' (Proof.identityEdge (clauseVars clause) "")
+
+    -- Perform case analysis
+    caseStep node clause = do
+      -- Make node a lemma.
+      markNodeAsLemma node
+
+      -- Choose a critical expression
+      subject <- choose (clauseCriticals clause)
+
+      case exprType subject of
+        DataTy dataType tyArgs -> do
+          cases <- casesOf dataType tyArgs
+          forM_ cases $ \(k, xs) -> do
+            -- The expression indicating the case of the subject.
+            let result = mkApps (Con k tyArgs) [Var x [] | x <- xs]
+
+            -- Construct the new clause.
+            clause' <-
+              if ?conditional
+                then do
+                  -- Case analysis extends hypothese in conditional mode.
+                  pure
+                    clause
+                      { clauseVars = xs ++ clauseVars clause,
+                        clauseHypEqs = mkEquation subject result : clauseHypEqs clause
+                      }
+                else do
+                  -- In normal mode, case analysis must be performed on a variable.
+                  Var x [] <- pure subject
+                  pure
+                    clause
+                      { clauseVars = xs ++ clauseVars clause,
+                        clauseGoal = substEquation Map.empty (Map.singleton x result) <$> clauseGoal clause
+                      }
+
+            -- Insert case into proof
+            node' <- insertNode clause'
+            insertEdge node node' (Proof.caseEdge (clauseVars clause) subject result xs)
+        nonDataType -> empty
+
+    -- Switch to refutation mode
+    refuteStep node clause
+      | not ?conditional = empty
+      | null (clauseHypEqs clause),
+        null (clauseHypRules clause) =
+          empty -- Empty hypotheses are always satisfiable.
+      | Just _ <- clauseGoal clause = do
+          node' <- insertNode (clause {clauseGoal = Nothing})
+          insertEdge node node' (Proof.identityEdge (clauseVars clause) "")
+      | otherwise =
+          empty -- Clause is already in refutation mode
+
+-- * Lemmas and Subst
+
+-- | Rewrite the first clause with an instance of the second.
+superpose ::
+  forall s.
+  ( ?program :: Program,
+    ?hypotheses :: Hypotheses
+  ) =>
+  Clause ->
+  Clause ->
+  Prover
+    s
+    ( Subst,
+      Maybe Clause
+    )
+superpose
+  clause
+  lemmaClause@Clause
+    { clauseVars = lemmaVars,
+      clauseTyVars = lemmaTyVars,
+      clauseHypRules = lemmaHypRules,
+      clauseHypEqs = lemmaHypEqs,
+      clauseGoal = Nothing
+    } = do
+    -- Attempt to solve hypotheses
+    (tyTheta, theta) <- solveEquations lemmaTyVars lemmaVars (lemmaHypRules ++ lemmaHypEqs) Map.empty Map.empty
+    pure
+      ( theta,
+        Nothing
+      )
+superpose
+  clause@Clause {clauseGoal = Just (Equation _ lhs rhs)}
+  lemmaClause@Clause
+    { clauseVars = lemmaVars,
+      clauseTyVars = lemmaTyVars,
+      clauseHypRules = lemmaHypRules,
+      clauseHypEqs = lemmaHypEqs,
+      clauseGoal = Just (Equation _ lemmaLhs lemmaRhs)
+    } = do
+    chooseM
+      [ go lhs rhs lemmaLhs lemmaRhs,
+        go lhs rhs lemmaRhs lemmaLhs,
+        go rhs lhs lemmaLhs lemmaRhs,
+        go rhs lhs lemmaRhs lemmaLhs
+      ]
+    where
+      lemmaHyps :: [Equation]
+      lemmaHyps =
+        lemmaHypRules
+          ++ lemmaHypEqs
+
+      go ::
+        Expr -> -- C[s\theta]
+        Expr -> -- r
+        Expr -> -- s
+        Expr -> -- t
+        Prover
+          s
+          ( Subst,
+            Maybe Clause -- C[t\theta] = r
           )
-            `cut` ( do
-                      -- Congruence
-                      goalEquations' <- consCong goalEquation
-                      goalNodes' <-
-                        mapM
-                          ( \goalEquation' -> do
-                              goalNode' <- insertNode True goalEquation'
-                              insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
-                              pure goalNode'
-                          )
-                          goalEquations'
+      go lhs rhs patLhs patRhs = do
+        -- Choose a non-variable sub-expression of lhs
+        (subExpr, ctx) <- choose (subExprs lhs)
+        guard $ case subExpr of Var _ _ -> False; noNVar -> True
 
-                      when trace $
-                        pprTraceM "Cong:" (ppr goalNodes')
+        -- Match with lemma with sub-expression
+        (tyTheta, theta) <- choose (matchExpr lemmaTyVars lemmaVars patLhs subExpr)
 
-                      expand trace
-                  )
-            `cut` ( do
-                      -- Function Extensionality
-                      markNodeAsLemma goalNode
-                      goalEquation' <- funExt goalEquation
-                      goalNode' <- insertNode True goalEquation'
-                      insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
+        -- Instantiate lemma's hypotheses and simplify
+        case simplifyEquations
+          ( fmap (substEquation tyTheta theta) lemmaHyps
+          ) of
+          Nothing -> empty
+          Just lemmaHyps' -> do
+            -- Solve hypotheses over remaining variables
+            (tyTheta', theta') <- solveEquations lemmaTyVars lemmaVars lemmaHyps' tyTheta theta
 
-                      when trace $
-                        pprTraceM "FunExt:" (ppr [goalNode'])
+            -- Apply substitution to right-hand side.
+            let resExpr = substExpr tyTheta' theta' patRhs
 
-                      expand trace
-                  )
-            `cut` ( do
-                      -- Superposition
-                      lemmaNode <- msum (fmap pure lemmas) -- Select a lemma node
-                      let lemmaEquation = Proof.lookupNode lemmaNode proof
+            pure
+              ( theta',
+                Just
+                  clause
+                    { -- Existential variables become universal, we assume all types are inhabited.
+                      clauseTyVars = (lemmaTyVars List.\\ Map.keys tyTheta') ++ clauseTyVars clause,
+                      clauseVars = (lemmaVars List.\\ Map.keys theta') ++ clauseVars clause,
+                      clauseGoal = Just (mkEquation (closeContext resExpr ctx) rhs)
+                    }
+              )
+superpose _ _ = empty
 
-                      -- Rewrite current goal
-                      (subst, goalEquation') <- superpose goalEquation lemmaEquation
-                      goalNode' <- insertNode False goalEquation'
-
-                      -- Add edges
-                      insertEdge goalNode goalNode' (identityEdge goalEquation goalEquation')
-                      insertEdge goalNode lemmaNode (substEdge subst goalEquation lemmaEquation)
-
-                      when trace $
-                        pprTraceM "Super:" (ppr [lemmaNode, goalNode'])
-                      <|> do
-                        -- Case analysis
-                        markNodeAsLemma goalNode
-                        case stuckOn of
-                          Nothing -> empty
-                          Just x
-                            | TyConApp dty tyargs <- idType x -> do
-                              cases <- casesOf dty tyargs
-                              goalNodes' <-
-                                forM
-                                  cases
-                                  ( \(k, fresh) -> do
-                                      let scope = mkInScopeSet (mkVarSet fresh)
-                                          subst = mkOpenSubst scope [(x, mkConApp2 k tyargs fresh)]
-                                          goalEquation' =
-                                            Equation
-                                              (fresh ++ (x `List.delete` xs))
-                                              (substExpr subst lhs)
-                                              (substExpr subst rhs)
-                                      goalNode' <- insertNode True goalEquation'
-                                      insertEdge goalNode goalNode' (caseEdge x fresh goalEquation goalEquation')
-                                      pure goalNode'
-                                  )
-
-                              when trace $
-                                pprTraceM "Case:" (ppr goalNodes')
-                            | otherwise -> empty
-                  )
-
--- | Try to reduce either side of an equation.
-reduceEquation :: Equation -> ProverM ProgramEnv (Either Equation (Maybe Id))
-reduceEquation goal@(Equation xs lhs rhs) = do
-  scope <- asks progInScopeSet
-  withEnv (intoEquationEnv xs) $ do
-    (equation, isProper, stuckOn) <- runReductT goal $ do
-      lhs' <- reduce lhs
-      rhs' <- reduce rhs
-      pure (Equation xs lhs' rhs')
-    pure $
-      if isProper
-        then Left (prune (getInScopeVars scope) equation)
-        else Right stuckOn
-
--- -- | Fail if an equation is absurd.
--- checkNotAbsurd :: Equation -> ProverM env ()
--- checkNotAbsurd (Equation xs lhs rhs) =
---   case (,) <$> viewNormalForm lhs <*> viewNormalForm rhs of
---     Just (Left (con, args), Left (con', args'))
---       | con /= con' -> empty
---     Just (Right lit, Right lit')
---       | lit /= lit' -> empty
---     nonMatch -> pure ()
-
--- | Reflexivity
-refl :: Equation -> ProverM ProgramEnv ()
-refl (Equation xs lhs rhs) = do
-  scope <- asks (envInScopeSet . intoEquationEnv xs)
-  guard (eqExpr scope lhs rhs)
-
--- | Decompose an equation by congruence if both sides are headed by a constructor or literal.
-consCong :: Equation -> ProverM ProgramEnv [Equation]
-consCong (Equation xs lhs rhs) = do
-  scope <- asks progInScopeSet
-  case (,) <$> viewNormalForm lhs <*> viewNormalForm rhs of
-    Just (Left (con, args), Left (con', args'))
-      | con == con' -> pure (prune (getInScopeVars scope) <$> zipWith (Equation xs) args args')
-    Just (Right lit, Right lit')
-      | lit == lit' -> pure []
-    nonMatch -> empty
-
--- | Create a fresh variable as an argument to both sides.
-funExt :: Equation -> ProverM env Equation
-funExt (Equation xs lhs rhs) = do
-  let ty = exprType lhs
-  guard (isFunTy ty)
-  x <- freshVar (funArgTy ty)
-  pure $
-    Equation (x : xs) (App lhs (Var x)) (App rhs (Var x))
+-- * Case analysis
 
 -- | Generate a fresh instance for each possible constructor.
-casesOf :: TyCon -> [Type] -> ProverM env [(DataCon, [Var])]
-casesOf dty tyargs =
-  mapM (\con -> (con,) <$> mapM freshVar (scaledThing <$> dataConInstArgTys con tyargs)) (tyConDataCons dty)
+casesOf :: (?dataTypeEnv :: DataTypeEnv) => DataType -> [Type] -> Prover s [(DataCon, [Var])]
+casesOf dataType tyArgs =
+  case Map.lookup dataType ?dataTypeEnv of
+    Nothing -> error "Could not find datatype!"
+    Just cons ->
+      forM cons $ \con -> do
+        xs <- mapM freshVar (dataConInstArgTys con tyArgs)
+        pure (con, xs)
 
--- | Create a fresh variable of a given type.
-freshVar :: Type -> ProverM env Id
-freshVar ty = do
-  unique <- getUniqueM
-  let name = mkInternalName unique (mkVarOcc ("x_" ++ show unique)) (UnhelpfulSpan UnhelpfulGenerated)
-  pure (mkLocalId name Many ty)
+-- * Utilities
 
--- | Rewrite the first equation with an instance of the second.
-superpose :: Equation -> Equation -> ProverM ProgramEnv (Subst, Equation)
-superpose goal@(Equation xs _ _) lemma@(Equation ys lhs rhs) = do
-  progScope <- asks progInScopeSet
-  scope <- asks (envInScopeSet . intoEquationEnv xs)
-  sub <- equationSubExprs goal
-  guard (not (isVariableSubExpr sub))
-  second (prune (getInScopeVars progScope))
-    <$> withSubExpr
-      sub
-      ( \expr ->
-          ( do
-              guard (isNonVar lhs)
-              subst <- match ys scope lhs expr
-              pure (subst, substExpr subst rhs)
-          )
-            <|> ( do
-                    guard (isNonVar rhs)
-                    subst <- match ys scope rhs expr
-                    pure (subst, substExpr subst lhs)
-                )
-      )
-  where
-    isNonVar (Var _) = False
-    isNonVar _ = True
-
--- | Find an instance of the first expression that is alpha equivalent to the second.
-match :: [Id] -> InScopeSet -> CoreExpr -> CoreExpr -> ProverM ProgramEnv Subst
-match univs scope expr1 expr2 = do
-  guard (eqType (exprType expr1) (exprType expr2))
-  subst@(Subst _ idenv _ _) <- runReaderT (execStateT (go expr1 expr2) (mkEmptySubst scope)) (mkRnEnv2 scope)
-  guard (all (`elemVarEnv` idenv) univs)
-  pure subst
-  where
-    go :: CoreExpr -> CoreExpr -> StateT Subst (ReaderT RnEnv2 (ProverM env)) ()
-    go (Var x) e
-      | x `elem` univs = do
-        subst@(Subst _ idenv _ _) <- get
-        case lookupVarEnv idenv x of
-          Nothing -> put (extendIdSubst subst x e)
-          Just e' -> guard (cheapEqExpr e e')
-      | Var y <- e = do
-        env <- ask
-        guard (rnOccL env x == rnOccR env y)
-    go (Lit lit1) (Lit lit2) = guard (lit1 == lit2)
-    go (App fun1 arg1) (App fun2 arg2) = do
-      go fun1 fun2
-      when (isValArg arg1) $
-        go arg1 arg2
-    go (Lam x1 body1) (Lam x2 body2) =
-      local
-        (\env -> rnBndr2 env x1 x2)
-        (go body1 body2)
-    go (Let bndr1 body1) (Let bndr2 body2) = do
-      let (xs1, defns1) = unzip (flattenBinds [bndr1])
-          (xs2, defns2) = unzip (flattenBinds [bndr2])
-      local (\env -> rnBndrs2 env xs1 xs2) $ do
-        zipWithM_ go defns1 defns2
-        go body1 body2
-    go (Case scrut1 x1 _ alts1) (Case scrut2 x2 _ alts2) = do
-      go scrut1 scrut2
-      local (\env -> rnBndr2 env x1 x2) $ do
-        zipWithM_ goAlt alts1 alts2
-    go _ _ = empty
-
-    goAlt :: CoreAlt -> CoreAlt -> StateT Subst (ReaderT RnEnv2 (ProverM env)) ()
-    goAlt (c1, bs1, e1) (c2, bs2, e2) = do
-      guard (c1 == c2)
-      local (\env -> rnBndrs2 env bs1 bs2) $
-        go e1 e2
-
--- * ProverM monad transformer
-
--- | The ProverM monad non-deterministically manipulate a proof.
-newtype ProverM env a = ProverM
-  { unProverM :: ReaderT env (StateT ProverState (LogicT (WriterT (Sum Integer) CoreM))) a
+-- | The monad for proof search.
+newtype Prover s a = Prover
+  { unProver ::
+      StateT -- Prover State
+        ProverState
+        ( LogicT -- Non-determinism
+            ( WriterT
+                [Equation] -- Unoriented equations
+                (FreshM s) -- Fresh name generation
+            )
+        )
+        a
   }
   deriving newtype
     ( Functor,
@@ -356,41 +288,123 @@ newtype ProverM env a = ProverM
       Alternative,
       Monad,
       MonadPlus,
-      MonadReader env,
-      MonadState ProverState,
-      MonadLogic
+      MonadLogic,
+      MonadFresh,
+      MonadState ProverState
     )
 
-instance MonadWriter (Sum Integer) (ProverM env) where
-  tell delta = ProverM $ lift $ lift $ lift $ tell delta
+instance MonadFail (Prover s) where
+  fail _ = empty
 
-  listen = error "This method is not supported!"
-  pass = error "This method is not supported!"
+instance MonadWriter [Equation] (Prover s) where
+  tell es = Prover $ lift $ lift $ tell es
 
-instance MonadUnique (ProverM env) where
-  getUniqueSupplyM = ProverM $ lift $ lift $ lift $ lift getUniqueSupplyM
+-- | Perform proof search.
+runProver :: (forall s. Prover s ()) -> ProverState -> (Maybe ProverState, [Equation])
+runProver prover st =
+  runFreshM $
+    runWriterT $
+      unLogicT
+        (execStateT (unProver prover) st)
+        (\st _ -> pure (Just st))
+        (pure Nothing)
 
-instance MonadIO (ProverM env) where
-  liftIO m = ProverM $ liftIO m
+-- | Proof search state.
+data ProverState = ProverState
+  { -- | The remaining fuel.
+    proverFuel :: !Int,
+    -- | A partial proof satisfying the global correctness condition.
+    proverProof :: !Proof.Proof,
+    -- | A collection of nodes that can be used as lemmas.
+    proverLemmas :: [(Int, Clause)],
+    -- | Unjustified nodes in the proof.
+    proverGoals :: Seq.Seq (Int, Clause),
+    -- | Sucess percentage of clause simplification.
+    proverStats :: [Int]
+  }
 
--- -- | Lift a CoreM action into a ProverM.
--- liftCoreM :: CoreM a -> ProverM env a
--- liftCoreM m = ProverM $ lift $ lift $ lift $ lift m
+-- | Initialise prover state.
+initProver :: Int -> [Clause] -> [Clause] -> ProverState
+initProver fuel lemmas goals =
+  let (proof, nodes) =
+        List.mapAccumL
+          ( \proof clause ->
+              let (proof', node) = Proof.insertNode clause proof
+               in (proof', (node, clause))
+          )
+          Proof.empty
+          (lemmas ++ goals)
+      (lemmaNodes, goalNodes) = splitAt (length lemmas) nodes
+   in ProverState
+        { proverFuel = fuel,
+          proverProof = proof,
+          proverLemmas = lemmaNodes,
+          proverGoals = Seq.fromList goalNodes,
+          proverStats = []
+        }
 
--- | Evaluate a prover action on a proof.
-runProverM :: ProverState -> ProverM env () -> ReaderT env (WriterT (Sum Integer) CoreM) [ProverState]
-runProverM st = mapReaderT (observeAllT . flip execStateT st) . unProverM
+-- | Decrease the state's fuel.
+decreaseFuel :: Prover s ()
+decreaseFuel = do
+  st <- get
+  guard (proverFuel st > 0)
+  put st {proverFuel = proverFuel st - 1}
 
--- | Change the reader environment of a Prover action.
-withEnv :: (env' -> env) -> ProverM env a -> ProverM env' a
-withEnv f (ProverM m) = ProverM (withReaderT f m)
+-- | Find the next unjustified node to expand.
+popGoal :: Prover s (Maybe (Int, Clause))
+popGoal = do
+  st <- get
+  case proverGoals st of
+    Seq.Empty -> pure Nothing
+    goals Seq.:|> goal -> do
+      put st {proverGoals = goals}
+      pure (Just goal)
 
--- | Take just the first result from the first action.
--- Otherwise, perform the second action.
-cut :: MonadLogic m => m a -> m a -> m a
-cut m1 m2 =
-  msplit m1 >>= \case
-    Nothing -> m2
-    Just (res, _) -> pure res
+-- | Check the globabl correctness condition.
+isGloballyCorrect :: (?online :: Bool) => Prover s ()
+isGloballyCorrect = do
+  st <- get
+  case Proof.closure (proverProof st) of
+    Nothing -> empty
+    Just proof ->
+      put st {proverProof = proof}
 
-infixr 9 `cut`
+-- | Insert a clause into a the proof graph as a new node.
+insertNode :: Clause -> Prover s Int
+insertNode clause = do
+  st <- get
+  let (proof, node) = Proof.insertNode clause (proverProof st)
+  put
+    st
+      { proverProof = proof,
+        proverGoals = (node, clause) Seq.:<| proverGoals st
+      }
+  pure node
+
+-- | Insert edge into proof graph.
+insertEdge :: (?online :: Bool) => Int -> Int -> Proof.Edge -> Prover s ()
+insertEdge source target edge = do
+  st <- get
+  case Proof.insertEdge source target edge (proverProof st) of
+    Nothing -> empty
+    Just proof ->
+      put st {proverProof = proof}
+
+-- | Indicate the a node can be used with Subst.
+markNodeAsLemma :: Int -> Prover s ()
+markNodeAsLemma node = do
+  modify $ \st ->
+    let clause = Proof.lookupNode node (proverProof st)
+     in st {proverLemmas = (node, clause) : proverLemmas st}
+
+-- | Fair choice.
+choose :: Foldable f => f a -> Prover s a
+choose =
+  foldr ((<|>) . pure) empty
+{-# INLINE choose #-}
+
+-- | Fair choice.
+chooseM :: Foldable f => f (Prover s a) -> Prover s a
+chooseM =
+  foldr (<|>) empty
+{-# INLINE chooseM #-}

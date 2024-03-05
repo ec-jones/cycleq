@@ -1,211 +1,187 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE UndecidableInstances #-}
-
--- |
--- Module: Cycleq.Reduction
 module CycleQ.Reduction
-  ( -- * Reduction
-    ReductT,
-    runReductT,
-    reduce,
-    viewNormalForm,
+  ( reduce,
+    reduceWithCriticals,
   )
 where
 
-import Control.Applicative
-import Control.Monad.Reader
-import CycleQ.Environment
-import GHC.Plugins hiding (empty)
+import CycleQ.Syntax
+import Data.Foldable
+import Data.Map qualified as Map
+import Data.Set qualified as Set
 
--- * Reduction
+-- | Reduce an expression.
+reduce ::
+  ( ?program :: Program,
+    ?hypotheses :: Hypotheses
+  ) =>
+  Expr ->
+  Expr
+reduce expr =
+  let (_, _, expr') = reduceWithCriticals expr
+   in expr'
+{-# INLINE reduce #-}
 
--- | Reduce a core expression as far as possible.
-reduce :: forall m. (MonadUnique m, MonadReader EquationEnv m) => CoreExpr -> ReductT m CoreExpr
-reduce expr0 = go expr0 []
+-- | Reduce an expression with critical expression analysis.
+reduceWithCriticals ::
+  ( ?program :: Program,
+    ?hypotheses :: Hypotheses
+  ) =>
+  Expr ->
+  ( Bool, -- \^ At least one reduction step?
+    Set.Set Expr, -- \^ Critical expressions needed for further reduction.
+    Expr -- \^ Reduct
+  )
+reduceWithCriticals expr =
+  let (p, reduct) = reduceWithCriticals' expr []
+   in (p, getCriticals reduct, getExpr reduct)
+{-# INLINE reduceWithCriticals #-}
+
+reduceWithCriticals' ::
+  ( ?program :: Program,
+    ?hypotheses :: Hypotheses
+  ) =>
+  Expr ->
+  [Reduct] ->
+  (Bool, Reduct)
+reduceWithCriticals' (Var x tyArgs) args
+  -- Apply hypotheses
+  | (True, reduct) <- applyHypotheses ?hypotheses expr =
+      (True, mkReduct reduct) -- Hypothese are assumed to be already be irreducible.
+
+  -- Unfold program definitions
+  | Just (as, defn) <- lookupProgram x ?program = do
+      let tyTheta = Map.fromList (zip as tyArgs)
+
+      case reduceDefn tyTheta defn args of
+        Left criticals ->
+          (False, Reduct expr criticals)
+        Right (body, args')
+          | exprType expr /= exprType body ->
+              error ("Type reduction error: " ++ show (expr, tyTheta, body))
+          | otherwise ->
+              let (_, reduct) = reduceWithCriticals' body args'
+               in (True, reduct)
+  | otherwise =
+      (False, Reduct expr Set.empty)
   where
-    -- Reduce a core expression under a series of arguments.
-    go :: CoreExpr -> [CoreArg] -> ReductT m CoreExpr
-    go (Var x) args = do
-      env <- ask
-      case lookupVarEnv (envBoundVars env) x of
-        Nothing
-          | isDataConWorkId x ->
-            pure (mkApps (Var x) args)
-          | elemVarSet x (envFreeVars env) -> do
-            stuckOn x
-            pure (mkApps (Var x) args)
-          | otherwise -> pprPanic "Variable not in scope!" (ppr x)
-        Just defn ->
-          ( do
-              isProper
-              go defn args
-          )
-            <|> pure (mkApps (Var x) args)
-    go (Lit lit) args = pure (mkApps (Lit lit) args)
-    go (App fun arg) args = do
-      -- Strict stategy
-      arg' <- notNeeded (go arg [])
-      go fun (arg' : args)
-    go (Lam x body) [] =
-      
-      Lam x <$> local (extendFreeVars x) (notNeeded $ go body [])
-      -- pure (Lam x body)
-    go (Lam x body) (arg : args) = do
-      isProper
-      scope <- asks envInScopeSet
-      let subst = mkOpenSubst scope [(x, arg)]
-      go (substExpr subst body) args
-    go (Let bind body) args
-      | null args = do
-        body' <- local (extendBoundVars bind) $ go body args
-        pure (Let bind body')
-      | otherwise = do
-        (bind', subst) <- freshenBind bind
-        body' <- local (extendBoundVars bind') $ go (substExpr subst body) args
-        pure (Let bind' body')
-    go (Case scrut x ty alts) args = do
-      scrut' <- go scrut []
-      case viewNormalForm scrut' of
-        Just (Left (con, conArgs))
-          | Just (_, patVars, rhs) <- findAlt (DataAlt con) alts -> do
-            isProper
-            scope <- asks envInScopeSet
-            let subst = mkOpenSubst scope ((x, scrut') : zip patVars conArgs)
-            go (substExpr subst rhs) args
-          | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
-        Just (Right lit)
-          | Just (_, [], rhs) <- findAlt (LitAlt lit) alts -> do
-            isProper
-            go rhs args
-          | otherwise -> pprPanic "Incomplete case expression!" (ppr alts)
-        Nothing -> empty
-    go (Tick _ expr) args = go expr args
-    go (Type ty) args = pure (mkApps (Type ty) args)
-    go expr args = pprPanic "Unsupported expression!" (ppr (mkApps expr args))
+    -- The expression to be reduced
+    expr :: Expr
+    expr = appReduct (Var x tyArgs) args
+reduceWithCriticals' (Con con tyArgs) args =
+  (False, RConApp con tyArgs args)
+reduceWithCriticals' (Lit lit) _ =
+  (False, RLit lit)
+reduceWithCriticals' (App fun arg) args =
+  let (p, arg') = reduceWithCriticals' arg []
+      (q, app) = reduceWithCriticals' fun (arg' : args)
+   in (p || q, app)
 
--- | Match a core expression against a first-order normal form.
-viewNormalForm :: CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)
-viewNormalForm = go [] []
+-- | Attempt to reduce a function definition under a series of arguments.
+reduceDefn ::
+  TySubst -> -- \^ Type instance
+  Body -> -- \^Function body
+  [Reduct] -> -- \^Arguments
+  Either
+    (Set.Set Expr) -- \^Critical expressions
+    ( Expr, -- \^ Reduct
+      [Reduct] -- \^ Remaining arguments
+    )
+reduceDefn tyTheta = go Map.empty
   where
-    go :: [CoreBind] -> [CoreArg] -> CoreExpr -> Maybe (Either (DataCon, [CoreArg]) Literal)
-    go binds args (Var x) =
-      case isDataConWorkId_maybe x of
-        Just con -> Just $ Left (con, fmap (\arg -> foldr Let arg binds) args)
-        Nothing -> Nothing
-    go binds args (Lit lit) = Just $ Right lit
-    go binds args (App fun arg)
-      | isValArg arg = go binds (arg : args) fun
-      | otherwise = go binds args fun
-    go binds [] (Let bind body) = go (bind : binds) [] body
-    go _ _ _ = Nothing
-
--- * Reduction Monad
-
--- | The reduction monad records if progress has been made
--- and which variable prevents further progress.
-newtype ReductT m a = ReductT
-  { unReductT :: m (Maybe (a, Bool), Maybe Id)
-  }
-
-instance Monad m => Functor (ReductT m) where
-  fmap f m = ReductT $ do
-    (res, x) <- unReductT m
-    case res of
-      Nothing -> pure (Nothing, x)
-      Just (a, p) -> pure (Just (f a, p), x)
-
-instance Monad m => Applicative (ReductT m) where
-  pure x = ReductT $ pure (Just (x, False), Nothing)
-
-  m1 <*> m2 = ReductT $ do
-    (res1, x) <- unReductT m1
-    (res2, y) <- unReductT m2
-    case res1 of
-      Nothing -> pure (Nothing, x <|> y)
-      Just (f, p) ->
-        case res2 of
-          Nothing -> pure (Nothing, x <|> y)
-          Just (a, q) -> pure (Just (f a, p || q), x <|> y)
-
-instance Monad m => Alternative (ReductT m) where
-  empty = ReductT $ pure (Nothing, Nothing)
-
-  m1 <|> m2 = ReductT $ do
-    (res1, x1) <- unReductT m1
-    (res2, x2) <- unReductT m2
-    pure (res1 <|> res2, x1 <|> x2)
-
-instance Monad m => Monad (ReductT m) where
-  return x = ReductT $ pure (Just (x, False), Nothing)
-
-  m >>= f = ReductT $ do
-    (res, x) <- unReductT m
-    case res of
-      Nothing -> pure (Nothing, x)
-      Just (a, p) -> do
-        (res', y) <- unReductT (f a)
-        case res' of
-          Nothing -> pure (Nothing, x <|> y)
-          Just (b, q) -> pure (Just (b, p || q), x <|> y)
-
-instance MonadReader env m => MonadReader env (ReductT m) where
-  ask = ReductT $ do
-    env <- ask
-    pure (Just (env, False), Nothing)
-
-  local f m = ReductT $ local f $ unReductT m
-
-instance MonadUnique m => MonadUnique (ReductT m) where
-  getUniqueSupplyM = ReductT $ do
-    supply <- getUniqueSupplyM
-    pure (Just (supply, False), Nothing)
-
--- | Evaluate a reduct action.
-runReductT :: Monad m => a -> ReductT m a -> m (a, Bool, Maybe Id)
-runReductT a m = do
-  (res, x) <- unReductT m
-  case res of
-    Nothing -> pure (a, False, x)
-    Just (a', p) -> pure (a', p, x)
-
--- | Mark a variable as preventing progress.
-stuckOn :: Monad m => Id -> ReductT m ()
-stuckOn x = ReductT $ pure (Just ((), False), Just x)
-
--- | Supress stuckOn.
-notNeeded :: Monad m => ReductT m a -> ReductT m a
-notNeeded m = ReductT $ do
-  (res, x) <- unReductT m
-  pure (res, Nothing)
-
--- | Mark a proper reduction step.
-isProper :: Monad m => ReductT m ()
-isProper = ReductT $ pure (Just ((), True), Nothing)
-
--- | Rename a core bind to prevent capture.
-freshenBind :: (MonadUnique m) => CoreBind -> m (CoreBind, Subst)
-freshenBind (NonRec x defn) = do
-  x' <- freshenVar x
-  let scope = mkInScopeSet (mkVarSet [x'])
-      subst = mkOpenSubst scope [(x, Var x')]
-  pure (NonRec x' defn, subst)
-freshenBind (Rec binds) = do
-  (xs, xs', defns) <-
-    unzip3
-      <$> mapM
-        ( \(x, defn) -> do
-            x' <- freshenVar x
-            pure (x, x', defn)
+    go :: Map.Map Var Reduct -> Body -> [Reduct] -> Either (Set.Set Expr) (Expr, [Reduct])
+    go theta (Lam x body) [] =
+      Left Set.empty -- Insufficient arguments
+    go theta (Lam x body) (arg : args) =
+      go (Map.insert x arg theta) body args
+    go theta (Case x alts) args =
+      case Map.lookup x theta of
+        Nothing ->
+          let subject = Var x []
+           in Left (Set.singleton subject)
+        Just (RConApp con tyArgs conArgs) ->
+          let (xs, rhs) = lookupConAlt con alts
+              theta' = Map.fromList (zip xs conArgs) <> theta
+           in go theta' rhs args
+        Just (RLit lit) ->
+          let rhs = lookupLitAlt lit alts
+           in go theta rhs args
+        Just (Reduct subject criticals) ->
+          Left (Set.insert subject criticals)
+    go theta (Body body) args =
+      Right
+        ( substExpr tyTheta (fmap getExpr theta) body,
+          args
         )
-        binds
-  let scope = mkInScopeSet (mkVarSet xs')
-      subst = mkOpenSubst scope (zip xs (fmap Var xs'))
-      defns' = fmap (substExpr subst) defns
-  pure (Rec (zip xs' defns'), subst)
+    go theta Bottom args =
+      error "Impossible branch reached!"
 
--- | Create a fresh variable of a given type.
-freshenVar :: MonadUnique m => CoreBndr -> m Id
-freshenVar x = setVarUnique x <$> getUniqueM
+-- | Find the case alternative associated with the given constructor.
+lookupConAlt :: DataCon -> [Alt] -> ([Var], Body)
+lookupConAlt con [] = error "Incomplete case expression!"
+lookupConAlt con altss@(alt : alts) =
+  case alt of
+    Default rhs -> go alts (Just rhs)
+    nonDefault -> go altss Nothing
+  where
+    go :: [Alt] -> Maybe Body -> ([Var], Body)
+    go [] Nothing = error "Incomplete case expression!"
+    go [] (Just rhs) = ([], rhs)
+    go (Default rhs : _) def = error "Double default!"
+    go (ConAlt con' xs rhs : alts) def
+      | con == con' = (xs, rhs)
+      | otherwise = go alts def
+    go (LitAlt _ _ : alts) def = go alts def
+
+-- | Find the case alternative associated with the given literal.
+lookupLitAlt :: Literal -> [Alt] -> Body
+lookupLitAlt lit [] = error "Incomplete case expression!"
+lookupLitAlt lit altss@(alt : alts) =
+  case alt of
+    Default rhs -> go alts (Just rhs)
+    nonDefault -> go altss Nothing
+  where
+    go :: [Alt] -> Maybe Body -> Body
+    go [] Nothing = error "Incomplete case expression!"
+    go [] (Just rhs) = rhs
+    go (Default rhs : _) def = error "Double default!"
+    go (ConAlt _ _ _ : alts) def = go alts def
+    go (LitAlt lit' rhs : alts) def
+      | lit == lit' = rhs
+      | otherwise = go alts def
+
+-- * Reducts
+
+-- | The result of attempting to reduce an expression.
+data Reduct
+  = Reduct
+      !Expr
+      (Set.Set Expr) -- \^ Critical sub-expressions
+  | RConApp
+      !DataCon
+      [Type]
+      [Reduct]
+  | RLit !Literal
+
+mkReduct :: Expr -> Reduct
+mkReduct expr =
+  case viewConApp expr of
+    Nothing -> Reduct expr Set.empty
+    Just (con, tyArgs, conArgs) ->
+      RConApp con tyArgs (fmap mkReduct conArgs)
+
+getExpr :: Reduct -> Expr
+getExpr (Reduct expr _) = expr
+getExpr (RConApp con tyArgs conArgs) =
+  appReduct (Con con tyArgs) conArgs
+getExpr (RLit lit) = Lit lit
+{-# INLINE getExpr #-}
+
+getCriticals :: Reduct -> Set.Set Expr
+getCriticals (Reduct _ criticals) = criticals
+getCriticals (RConApp _ _ _) = Set.empty
+getCriticals (RLit _) = Set.empty
+{-# INLINE getCriticals #-}
+
+appReduct :: Expr -> [Reduct] -> Expr
+appReduct = foldl' (\hd -> App hd . getExpr)
+{-# INLINE appReduct #-}
